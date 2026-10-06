@@ -249,7 +249,7 @@ API 地址   https://discovery-api.intern-ai.org.cn/v1
 模型        deepseek-v4-pro-0813  /  deepseek-v4-flash-0731  /  glm-5.3 …
 ```
 
-1. 到 [intern-ai.org.cn](https://intern-ai.org.cn) 微信扫码注册
+1. 到 [[intern-ai.org.cn]([https://intern-ai.org.cn](https://discovery.intern-ai.org.cn/)) ](https://discovery.intern-ai.org.cn/)微信扫码注册
 2. 控制台创建 API Key
 3. 填进 Nekolyra 的「系统配置」
 
