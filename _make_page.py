@@ -13,7 +13,7 @@ import urllib.request
 BASE = r"D:\ai\qq_bot"
 INST = r"D:\ai\Nekoe-v1.0.0.0"
 MIRROR = r"D:\ai\echo-qq-bot"
-REPO = "Mario9800/Nekolyra"
+REPO = "awnpw/Nekolyra"
 V = io.open(os.path.join(BASE, "VERSION"), encoding="utf-8").read().strip()
 
 

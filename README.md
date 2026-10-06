@@ -8,7 +8,7 @@
 
 `Windows 桌面版` · `插件化` · `本地优先` · `数据全在自己手里`
 
-<sub>当前版本 **1.0.3.7** · [更新日志](CHANGELOG.md) · [下载最新版](https://github.com/Mario9800/nekoe/releases/latest)</sub>
+<sub>当前版本 **1.0.3.8** · [更新日志](CHANGELOG.md) · [下载最新版](https://github.com/awnpw/nekoe/releases/latest)</sub>
 
 </div>
 
@@ -68,7 +68,7 @@ Nekolyra 是一个跑在 QQ 群里的 AI 助手。它不只是"接个 API 回话
 - **改完代码点「重新加载」** —— 不用重启程序
 - **插件能往界面里加东西** —— 自己的配置小窗、自己的管理页、自己的接口
 - **自己写插件** —— 见 [插件系统](#插件系统)，或
-  [nekoe-plugins](https://github.com/Mario9800/nekoe-plugins) 里的完整文档
+  [nekoe-plugins](https://github.com/awnpw/nekoe-plugins) 里的完整文档
 
 > **插件页面不占侧边栏。** 装十个插件，侧边栏还是干干净净一项「插件」——
 > 每个插件的入口都在它自己的卡片上。
@@ -193,7 +193,7 @@ Release 页面对一遍。
 
 ### 方式一：下载桌面版（推荐）
 
-1. 到 [Releases](https://github.com/Mario9800/nekoe/releases/latest) 下载 **`Nekolyra-desktop-vX.X.X.X.zip`**
+1. 到 [Releases](https://github.com/awnpw/nekoe/releases/latest) 下载 **`Nekolyra-desktop-vX.X.X.X.zip`**
 2. 解压到任意目录（**整个文件夹要一起留着**，`_internal` 是运行库）
 3. 双击 `Nekolyra.exe`
 4. 按引导填：管理员 QQ、管理密码、机器人 QQ、AI Key
@@ -207,7 +207,7 @@ Release 页面对一遍。
 ### 方式二：跑源码
 
 ```bash
-git clone https://github.com/Mario9800/nekoe.git
+git clone https://github.com/awnpw/nekoe.git
 cd nekoe
 pip install -r requirements.txt
 python bot.py
@@ -249,7 +249,7 @@ API 地址   https://discovery-api.intern-ai.org.cn/v1
 模型        deepseek-v4-pro-0813  /  deepseek-v4-flash-0731  /  glm-5.3 …
 ```
 
-1. 到 [[intern-ai.org.cn]([https://intern-ai.org.cn](https://discovery.intern-ai.org.cn/)) ](https://discovery.intern-ai.org.cn/)微信扫码注册
+1. 到 [intern-ai.org.cn](https://intern-ai.org.cn) 微信扫码注册
 2. 控制台创建 API Key
 3. 填进 Nekolyra 的「系统配置」
 
@@ -330,7 +330,7 @@ def setup(ctx):
 
 丢进 `data/plugins/` 下，管理界面点「重新加载」就能用，**不用重启**。
 
-**完整文档**：[nekoe-plugins](https://github.com/Mario9800/nekoe-plugins) ——
+**完整文档**：[nekoe-plugins](https://github.com/awnpw/nekoe-plugins) ——
 `ctx` 能力全表、一个能跑的完整例子、容易踩的坑清单、可直接复制的骨架。
 
 写完想被收录，提 PR 到 `nekoe-plugins` 改 `index.json` 就行。
@@ -435,7 +435,7 @@ nekoe/
 
 ---
 
-## 项目状态
+## 项目状态（说实话）
 
 这个项目是**个人开发**的，我不想把它说得比实际更成熟。几件事分清楚：
 
@@ -484,11 +484,11 @@ nekoe/
 
 ---
 
-## 主题
+## 主题与版权
 
-**本项目的默认人格是「默认角色」。**
+**本项目的默认人格是「默认角色」——某游戏里的角色。**
 
-代码里的 `persona_*` 配置项可以直接改成任何角色或原创形象：
+这是**粉丝向内容**，代码里的 `persona_*` 配置项可以直接改成任何角色或原创形象：
 
 | 字段 | 说明 |
 |---|---|
@@ -500,6 +500,9 @@ nekoe/
 这四个字段留空就是「没有设定人格」，机器人会以中性语气回话。
 
 > ⚠️ **关于版权**
+> 某游戏及其角色（含"默认角色"）的版权归**相关权利人**所有，本项目与官方无任何关系。
+> 本仓库只包含**角色设定的文字描述**，不含任何游戏美术资源。
+>
 > · **自己用 / 群里玩** —— 没问题，随便改
 > · **二次分发 / 商用** —— 建议换成你自己的原创人格，避免版权纠纷
 
@@ -534,14 +537,14 @@ nekoe/
 版本号固定四段 `主.次.修.补`：
 
 ```
-修 bug / 小改动       ->  只动最后一位      1.0.3.7 → 1.0.2.2
-加了一组新功能        ->  动第三位          1.0.3.7 → 1.0.3.7
-大改 / 不兼容         ->  动第二位          1.0.3.7 → 1.1.0.0
+修 bug / 小改动       ->  只动最后一位      1.0.3.8 → 1.0.2.2
+加了一组新功能        ->  动第三位          1.0.3.8 → 1.0.3.8
+大改 / 不兼容         ->  动第二位          1.0.3.8 → 1.1.0.0
 ```
 
-**打 tag 时四段必须写全** —— `v1.0.3.7`，不要写成 `v1.0.2`。
+**打 tag 时四段必须写全** —— `v1.0.3.8`，不要写成 `v1.0.2`。
 程序比对版本用的是四段元组（不足的补 0），三段的 tag 会被补成
-`1.0.2.0`，跟 `1.0.3.7` 比就小了 —— 用户明明装了新版，程序却一直提示
+`1.0.2.0`，跟 `1.0.3.8` 比就小了 —— 用户明明装了新版，程序却一直提示
 有更新。这条靠约定规避，比在代码里猜"三段到底指哪个版本"可靠。
 
 - **报 Bug** 请附上 `startup.log` 的相关片段
@@ -557,7 +560,7 @@ nekoe/
   改 `bot.py` 里的管理界面（`ADMIN_HTML`）时**务必跑 `_check_ui.py`** ——
   它抓过好几次"一处 JS 报错导致整个页面点不动"的问题。
 - **写插件** 不用改主程序，见 [插件系统](#插件系统)。
-  想被市场收录就提 PR 到 [nekoe-plugins](https://github.com/Mario9800/nekoe-plugins)
+  想被市场收录就提 PR 到 [nekoe-plugins](https://github.com/awnpw/nekoe-plugins)
 
 ---
 
@@ -604,7 +607,7 @@ nekoe/
   也未获得其授权或认可。
 - 「游戏」「默认角色」等名称、角色及相关素材，权利归其各自权利人所有。
 - 项目**不包含**游戏的音频、数据文件或拆包资源。代码里内嵌了一张默认背景图
-  （用于新装时的界面外观），以及 AI 生成的原创角色图标。
+  （用于新装时的界面外观），以及一个 AI 生成的原创角色图标。
 - **上述背景图如涉及权利人权益，请通过 Issue 联系，我们会立即移除。**
 - 使用者在本机设置的壁纸、人格设定、知识库等内容均保存在本地，
   不上传、不随仓库分发。

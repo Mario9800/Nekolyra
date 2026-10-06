@@ -3376,7 +3376,7 @@ def plugin_pages():
 # ============================================================
 #  插件市场 —— 阶段 3
 # ============================================================
-#  注册表是一份 JSON 索引（默认在 nekoe-plugins 仓库里），格式：
+#  注册表是一份 JSON 索引（默认在 Nekolyra-plugins 仓库里），格式：
 #    {"version": 1, "plugins": [
 #       {"name":"hello", "display_name":"打招呼", "version":"1.0.0",
 #        "author":"...", "description":"...",
@@ -3394,7 +3394,7 @@ def plugin_pages():
 # 市场索引的多个来源，按顺序试。第一个能用的就用。
 # 为什么不用 raw.githubusercontent.com 打头：这个域名在国内被单独墙，
 # 直连和代理都是 SSL EOF；jsDelivr 和 api.github.com 反而直连就通。
-PLUGIN_MARKET_REPO = os.environ.get("NEKOE_PLUGIN_REPO", "Mario9800/nekoe-plugins")
+PLUGIN_MARKET_REPO = os.environ.get("NEKOE_PLUGIN_REPO", "awnpw/Nekolyra-plugins")
 PLUGIN_MARKET_BRANCH = os.environ.get("NEKOE_PLUGIN_BRANCH", "main")
 
 
@@ -3519,7 +3519,7 @@ def _read_app_version():
 APP_VERSION = _read_app_version()
 
 # 检查更新用的 GitHub 仓库。想指向自己的 fork 就设这个环境变量。
-UPDATE_REPO = os.environ.get("NEKOE_UPDATE_REPO", "Mario9800/Nekolyra")
+UPDATE_REPO = os.environ.get("NEKOE_UPDATE_REPO", "awnpw/Nekolyra")
 # 可选的 GitHub token：未登录的 api.github.com 只有 60 次/小时，
 # 带上 token 是 5000 次/小时。普通用户不用管（有缓存，一天就几次），
 # 但如果机器人频繁重启、或者同一 IP 上还有别的工具在打 GitHub，就会撞上限。
@@ -3990,7 +3990,7 @@ async def install_plugin_from_url(url, expect_name="", subpath=""):
                          "source": raw,
                          # 仓库子目录必须一起存！不然更新的时候
                          # 会去仓库根目录找 metadata.json，找不到就更新失败
-                         # （插件放子目录的仓库，比如 nekoe-plugins 的 plugins/<名>）
+                         # （插件放子目录的仓库，比如 Nekolyra-plugins 的 plugins/<名>）
                          "path": sub,
                          "installed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
             _save_plugin_state()
@@ -5095,6 +5095,8 @@ class AIHandler:
 
         full_text = []
         reasoning_text = []
+        _t_call = time.time()
+        _t_first = None
         try:
             client = get_http()
             async with client.stream("POST", self.endpoint(), json=payload,
@@ -5106,6 +5108,8 @@ class AIHandler:
 
                 async for line in r.aiter_lines():
                     if not line:
+                        if _t_first is None and line.strip():
+                            _t_first = time.time() - _t_call
                         continue
                     if line.startswith("data:"):
                         chunk = line[5:].strip()
@@ -5135,6 +5139,10 @@ class AIHandler:
             reasoning = "".join(reasoning_text).strip()
             if reasoning:
                 log("mem", "AI思维链", reasoning[:200] + ("..." if len(reasoning) > 200 else ""))
+            _dt = time.time() - _t_call
+            _n = len("".join(full_text))
+            log("info", "AI", "%s 首字 %.1fs | 总 %.1fs | %d 字"
+                % (self.backend, _t_first or _dt, _dt, _n))
             return "".join(full_text).strip()
         except asyncio.CancelledError:
             raise
@@ -10586,7 +10594,7 @@ textarea.inp{resize:vertical;line-height:1.6}
               <div class="plug-install-tip">
                 仓库根目录要有 <code class="inline-code">metadata.json</code> 和入口文件。
                 插件放在子目录里也行，装完我会自己找。不确定怎么写？
-                看 <a href="https://github.com/Mario9800/nekoe-plugins" target="_blank">插件模板</a>。
+                看 <a href="https://github.com/awnpw/Nekolyra-plugins" target="_blank">插件模板</a>。
               </div>
             </div>
           </div>
@@ -13080,7 +13088,7 @@ function renderMarket(items){
     box.innerHTML='<div class="plug-empty">'
       +'<div style="font-size:14px;color:var(--text-2);margin-bottom:8px">市场里还没有插件</div>'
       +'<div style="font-size:12px;color:var(--text-3);line-height:2">'
-      +'收录方式是改 <code class="inline-code">nekoe-plugins</code> 仓库的 '
+      +'收录方式是改 <code class="inline-code">Nekolyra-plugins</code> 仓库的 '
       +'<code class="inline-code">index.json</code> 然后提 PR。<br>'
       +'也可以直接用左边「已安装」页里的「从 GitHub 地址安装」。'
       +'</div></div>';

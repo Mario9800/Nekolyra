@@ -17,11 +17,26 @@ except ImportError:
     HAS_PIL = False
     print("[警告] 未安装 Pillow。请执行：pip install Pillow")
 
+# 老婆介绍的超时。内外用同一个值 —— 以前外层 wait_for(4.5)
+# 内层 httpx timeout=4.0，内层先炸，外层那句"生成介绍超时"
+# 是死代码，日志里看到的是 [AI] raw 出错。
+AI_INTRO_TIMEOUT = 4.5
+
 # ============================================================
 # 凭证
 # ============================================================
 APP_ID = "YOUR_APP_ID"
 APP_SECRET = "YOUR_APP_SECRET"
+
+# 填了占位符就直接退出。否则会带着 "YOUR_APP_ID" 去请求 token，拿到 401，
+# 然后整条链路在日志里只留一句"获取 token 失败"，用户对着它发懵。
+if (not APP_ID or APP_ID == "YOUR_APP_ID"
+        or not APP_SECRET or APP_SECRET == "YOUR_APP_SECRET"):
+    print("\n  [!] QQ 官方机器人的 APP_ID / APP_SECRET 还没填。\n"
+          "      请编辑 official_bot.py，"
+          "或用环境变量 QQ_APP_ID / QQ_APP_SECRET 覆盖。\n", flush=True)
+    raise SystemExit(1)
+
 
 OFFICIAL_INTENTS = (1 << 25) | (1 << 30) | (1 << 24) | (1 << 26)
 
@@ -172,9 +187,14 @@ class Database:
                 created_at TEXT NOT NULL)""")
             c.execute("CREATE INDEX IF NOT EXISTS idx_ex_rec ON exchange_records(group_id, user_id)")
             try:
-                c.execute("DELETE FROM panel_groups WHERE panel_id IS NOT NULL AND panel_id NOT LIKE 'p_%'")
-            except Exception:
-                pass
+                # 别静默删 —— 以前 except: pass，群不见了日志里一个字都没有
+                cur = c.execute("DELETE FROM panel_groups "
+                                    "WHERE panel_id IS NOT NULL "
+                                    "AND panel_id NOT LIKE 'p_%'")
+                if cur.rowcount:
+                    log(f"[数据库] 清理了 {cur.rowcount} 条 panel_id 格式异常的旧记录（接口换了格式的话这不一定是脏数据）")
+            except Exception as e:
+                log(f"[数据库] 清理 panel_groups 失败: {type(e).__name__}: {e}")
             c.commit()
 
     def sign_get(self, u, g):
@@ -397,7 +417,8 @@ async def resolve_nickname(group_openid, user_openid):
             except Exception as e:
                 log(f"[昵称] 查 NapCat 失败: {type(e).__name__}: {e}")
     fallback = "用户" + user_openid[-6:].upper()
-    _nick_cache_put(user_openid, fallback)
+    # 不写缓存：NapCat 重启或接口抖一下就会走到这里，写进去要挂 12 小时，
+    # 期间所有人的昵称都是"用户XXXXXX"，明明服务早恢复了。
     return fallback
 
 
@@ -416,24 +437,50 @@ class TokenManager:
         self.app_secret = app_secret
         self.token = None
         self.expires_at = 0
+        self._lock = None   # 刷新 token 用，防并发重复请求
 
     async def get(self):
+        r"""拿 token。**失败返回 None，绝不抛。**
+
+        以前这里是直接 raise RuntimeError —— 而 11 个调用方一个 try 都没有，
+        所以 APP_ID 填错、secret 过期、或者网络抖一下，异常会一路穿过事件
+        循环，把整条消息处理链炸掉，日志里只剩一句"获取 token 失败"。
+        """
         now = time.time()
         if self.token and now < self.expires_at - 60:
             return self.token
-        url = "https://bots.qq.com/app/getAppAccessToken"
-        payload = {"appId": str(self.app_id), "clientSecret": str(self.app_secret)}
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.post(url, json=payload)
-            if r.status_code != 200:
-                raise RuntimeError(f"获取 token 失败 HTTP {r.status_code}: {r.text[:300]}")
-            data = r.json()
-        if "access_token" not in data:
-            raise RuntimeError(f"响应中没有 access_token：{data}")
-        self.token = data["access_token"]
-        self.expires_at = now + int(data.get("expires_in", 7200))
-        log(f"[Token] 已刷新，{data.get('expires_in')} 秒后过期")
-        return self.token
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        async with self._lock:
+            # 双重检查：等锁期间别人可能已经刷过了
+            now = time.time()
+            if self.token and now < self.expires_at - 60:
+                return self.token
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    r = await client.post(
+                        "https://bots.qq.com/app/getAppAccessToken",
+                        json={"appId": APP_ID, "clientSecret": APP_SECRET})
+                if r.status_code != 200:
+                    log(f"[Token] 获取失败 HTTP {r.status_code}: {r.text[:200]}")
+                    return None
+                data = r.json()
+                tok = data.get("access_token")
+                if not tok:
+                    log(f"[Token] 响应里没有 access_token：{str(data)[:200]}")
+                    return None
+                self.token = tok
+                try:
+                    self.expires_at = now + int(data.get("expires_in", 7200))
+                except (TypeError, ValueError):
+                    self.expires_at = now + 7200
+                return self.token
+            except Exception as e:
+                log(f"[Token] 请求异常: {type(e).__name__}: {e}")
+                return None
+
+
+
 
 
 TOKEN_MGR = TokenManager(APP_ID, APP_SECRET)
@@ -486,7 +533,7 @@ async def ai_chat(user_msg, mode="group"):
 
 async def _ai_raw(host, payload):
     try:
-        async with httpx.AsyncClient(timeout=4.0) as client:
+        async with httpx.AsyncClient(timeout=AI_INTRO_TIMEOUT) as client:
             r = await client.post(f"{host}/api/chat", json=payload)
             r.raise_for_status()
             return r.json().get("message", {}).get("content", "").strip()
@@ -514,7 +561,7 @@ async def _gen_wife_intro(role_name):
         "stream": False,
     }
     try:
-        r = await asyncio.wait_for(_ai_raw(host, payload), timeout=4.5)
+        r = await asyncio.wait_for(_ai_raw(host, payload), timeout=AI_INTRO_TIMEOUT)
     except Exception as e:
         log(f"[老婆] 生成介绍超时: {type(e).__name__}")
         return ""
@@ -571,6 +618,9 @@ def _api_base(scope, target_id):
 
 async def upload_media(scope, target_id, file_type, file_bytes):
     token = await TOKEN_MGR.get()
+    if not token:
+        log("[QQ官方] 拿不到 token，跳过本次发送")
+        return False
     api = _api_base(scope, target_id) + "files"
     headers = {"Authorization": f"QQBot {token}", "Content-Type": "application/json"}
 
@@ -631,9 +681,21 @@ async def upload_group_image(group_openid, image_url):
 # ============================================================
 async def send_group_msg(group_openid, content, msg_id=None, msg_seq=1):
     token = await TOKEN_MGR.get()
+    if not token:
+        log("[QQ官方] 拿不到 token，跳过本次发送")
+        return False
     url = f"https://api.sgroup.qq.com/v2/groups/{group_openid}/messages"
     headers = {"Authorization": f"QQBot {token}", "Content-Type": "application/json"}
-    body = {"content": content[:4000], "msg_type": 0, "msg_seq": msg_seq}
+    if len(content) > 4000:
+        # 别硬切 —— 用户会看到"话说到一半"。优先断在句末标点上。
+        cut = content[:4000]
+        for sep in ("。", "！", "？", "\n", ".", "!", "?"):
+            idx = cut.rfind(sep)
+            if idx > 3000:
+                cut = cut[:idx + 1]
+                break
+        content = cut
+    body = {"content": content, "msg_type": 0, "msg_seq": msg_seq}
     if msg_id:
         body["msg_id"] = msg_id
     async with httpx.AsyncClient(timeout=15.0) as client:
@@ -646,6 +708,9 @@ async def send_group_msg(group_openid, content, msg_id=None, msg_seq=1):
 
 async def send_group_markdown(group_openid, md_content, msg_id=None, msg_seq=1):
     token = await TOKEN_MGR.get()
+    if not token:
+        log("[QQ官方] 拿不到 token，跳过本次发送")
+        return False
     url = f"https://api.sgroup.qq.com/v2/groups/{group_openid}/messages"
     headers = {"Authorization": f"QQBot {token}", "Content-Type": "application/json"}
     body = {"msg_type": 2, "markdown": {"content": md_content[:4000]}, "msg_seq": msg_seq}
@@ -673,6 +738,9 @@ async def send_md_fallback(group_openid, md_content, msg_id=None, msg_seq=1):
 
 async def send_group_media_with_text(group_openid, file_info, content=None, msg_id=None, msg_seq=1):
     token = await TOKEN_MGR.get()
+    if not token:
+        log("[QQ官方] 拿不到 token，跳过本次发送")
+        return False
     url = f"https://api.sgroup.qq.com/v2/groups/{group_openid}/messages"
     headers = {"Authorization": f"QQBot {token}", "Content-Type": "application/json"}
     body = {"msg_type": 7, "media": {"file_info": file_info}, "msg_seq": msg_seq}
@@ -691,6 +759,9 @@ async def send_group_media_with_text(group_openid, file_info, content=None, msg_
 
 async def send_c2c_msg(openid, content, msg_id=None, msg_seq=1):
     token = await TOKEN_MGR.get()
+    if not token:
+        log("[QQ官方] 拿不到 token，跳过本次发送")
+        return False
     url = f"https://api.sgroup.qq.com/v2/users/{openid}/messages"
     headers = {"Authorization": f"QQBot {token}", "Content-Type": "application/json"}
     body = {"content": content[:4000], "msg_type": 0, "msg_seq": msg_seq}
@@ -708,6 +779,9 @@ async def respond_interaction(interaction_id, code=0):
     if not interaction_id:
         return False
     token = await TOKEN_MGR.get()
+    if not token:
+        log("[QQ官方] 拿不到 token，跳过本次发送")
+        return False
     url = f"https://api.sgroup.qq.com/interactions/{interaction_id}"
     headers = {"Authorization": f"QQBot {token}", "Content-Type": "application/json"}
     async with httpx.AsyncClient(timeout=5.0) as client:
@@ -727,6 +801,9 @@ async def set_custom_menu():
     if not CFG.get("menu_enabled", True):
         return
     token = await TOKEN_MGR.get()
+    if not token:
+        log("[QQ官方] 拿不到 token，跳过本次发送")
+        return False
     url = "https://api.sgroup.qq.com/v2/menu"
     headers = {"Authorization": f"QQBot {token}", "Content-Type": "application/json"}
     body = {
@@ -759,6 +836,9 @@ async def create_command_panel(group_openid):
     if not group_openid:
         return None
     token = await TOKEN_MGR.get()
+    if not token:
+        log("[QQ官方] 拿不到 token，跳过本次发送")
+        return False
     url = "https://api.sgroup.qq.com/v2/panels"
     headers = {"Authorization": f"QQBot {token}", "Content-Type": "application/json"}
     body = {
@@ -800,6 +880,9 @@ async def modify_panel_target(panel_id, op, group_openids=None, user_openids=Non
     if not panel_id or not str(panel_id).startswith("p_"):
         return False
     token = await TOKEN_MGR.get()
+    if not token:
+        log("[QQ官方] 拿不到 token，跳过本次发送")
+        return False
     url = f"https://api.sgroup.qq.com/v2/panels/{panel_id}/target"
     headers = {"Authorization": f"QQBot {token}", "Content-Type": "application/json"}
     body = {"op": op}
@@ -1421,7 +1504,14 @@ async def send_wife_result(group_openid, result, msg_id=None):
 # WebSocket
 # ============================================================
 async def run_once():
+    _tk = await TOKEN_MGR.get()
+    if not _tk:
+        log("[QQ官方] 拿不到 token，跳过")
+        return False
     token = await TOKEN_MGR.get()
+    if not token:
+        log("[QQ官方] 拿不到 token，跳过本次发送")
+        return False
     headers = {"Authorization": f"QQBot {token}"}
     async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.get("https://api.sgroup.qq.com/gateway", headers=headers)
@@ -1441,7 +1531,7 @@ async def run_once():
         identify = {
             "op": 2,
             "d": {
-                "token": f"QQBot {await TOKEN_MGR.get()}",
+                "token": f"QQBot {_tk}",
                 "intents": OFFICIAL_INTENTS,
                 "properties": {"$os": "Windows", "$browser": "python", "$device": "pc"},
             },
