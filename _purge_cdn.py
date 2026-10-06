@@ -2,7 +2,7 @@
 r"""清 jsDelivr 缓存 —— 发版后必须跑一次。
 
 为什么需要它：版本检查的 CDN 兜底读的是
-  https://cdn.jsdelivr.net/gh/Mario9800/Nekolyra@main/version.json
+  https://cdn.jsdelivr.net/gh/awnpw/Nekolyra@main/version.json
 而 jsDelivr 对 @main 有约 12 小时缓存。不清的话，发完新版之后的
 最多 12 小时里，兜底路径会报**旧版本号** —— 用户点"检查更新"看到
 "已是最新"，其实新版早发了。
@@ -14,7 +14,7 @@ import sys
 import time
 import urllib.request
 
-REPO = "Mario9800/Nekolyra"
+REPO = "awnpw/Nekolyra"
 FILES = ["version.json", "VERSION", "CHANGELOG.md", "README.md",
          "data/plugins/adfilter/main.py",
          "data/plugins/adfilter/metadata.json"]
