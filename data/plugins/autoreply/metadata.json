@@ -1,0 +1,14 @@
+{
+    "name": "autoreply",
+    "display_name": "关键词回复",
+    "version": "1.0.0",
+    "author": "Nekolyra",
+    "description": "关键词自动回复，带命中统计和自带管理页。照着它就能写自己的插件。",
+    "entry": "main.py",
+    "tags": ["工具", "群管"],
+    "defaults": {
+        "ar_enabled": true,
+        "ar_pairs": "帮助=发送「帮助」看用法\n群规=请先看群公告",
+        "ar_cooldown": 5
+    }
+}

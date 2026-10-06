@@ -1,0 +1,61 @@
+name: 💡 功能建议
+description: 想要新功能，或者觉得某处可以做得更好
+title: "[建议] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **先说清楚使用场景，比说「加个 XX」有用得多。**
+
+        比如「加个禁言功能」不如说
+        「群里有人刷屏的时候，我想让机器人自动禁言 5 分钟，
+        现在只能手动踢，手速跟不上」—— 前者我只能猜你要什么。
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: 先确认一下
+      options:
+        - label: 我已经搜过现有的 Issue 和建议，没有重复的
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你遇到的是什么麻烦
+      description: 描述场景，不要直接说解决方案
+      placeholder: |
+        我们群晚上经常有人刷屏，
+        现在只能手动踢人，但我睡觉了没人管。
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: 你希望它怎么做
+      placeholder: |
+        希望可以设置：同一个人 1 分钟内发超过 10 条，
+        自动禁言 5 分钟，并在群里提示一下。
+    validations:
+      required: false
+
+  - type: textarea
+    id: alt
+    attributes:
+      label: 你试过的替代办法
+      description: 现在是怎么绕过去的？这能帮我判断这个需求有多急
+    validations:
+      required: false
+
+  - type: dropdown
+    id: willhelp
+    attributes:
+      label: 这个功能做出来，你愿意帮忙测试吗
+      options:
+        - 愿意，可以第一时间试
+        - 可以用，但不一定有时间测
+        - 只是提个想法
+    validations:
+      required: false

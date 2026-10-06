@@ -1,0 +1,13 @@
+{
+    "name": "report",
+    "display_name": "群报",
+    "version": "1.0.0",
+    "author": "Nekolyra",
+    "description": "统计群里某天的发言排行。原来内置在主程序里，现在是可装卸的插件。",
+    "entry": "main.py",
+    "tags": ["统计", "群管"],
+    "defaults": {
+        "report_enabled": true,
+        "report_top_n": 10
+    }
+}

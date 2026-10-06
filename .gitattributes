@@ -1,0 +1,21 @@
+# 统一换行符，避免 Windows/Linux 来回改动的噪音
+* text=auto
+
+# 源码按平台原生换行
+*.py   text
+*.ps1  text
+*.md   text
+*.txt  text
+*.json text
+*.yml  text
+*.yaml text
+
+# 二进制，别动
+*.ico  binary
+*.png  binary
+*.jpg  binary
+*.zip  binary
+*.db   binary
+
+# 让 GitHub 别把 .ps1 当成 PowerShell 之外的奇怪语言
+*.ps1  linguist-language=PowerShell
