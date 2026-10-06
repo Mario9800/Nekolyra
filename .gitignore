@@ -1,0 +1,49 @@
+# ========== 配置与隐私（绝对不要提交）==========
+config.json
+config.json.bak*
+.env
+startup.log
+_wiki_cache/
+_wiki_entries.json
+_旧版数据_*/
+
+# data/ 里的用户数据全部忽略，但保留目录结构 + 内置插件
+# 注意：git 不能重新包含一个"父目录已被排除"的文件，
+# 所以每个插件目录都要先放行目录本身，再放行里面的文件。
+data/*
+!data/.gitkeep
+!data/plugins/
+data/plugins/*
+!data/plugins/hello/
+!data/plugins/hello/**
+!data/plugins/lottery/
+!data/plugins/lottery/**
+!data/plugins/report/
+!data/plugins/report/**
+!data/plugins/sign/
+!data/plugins/sign/**
+!data/plugins/wife/
+!data/plugins/wife/**
+
+# ========== 构建产物 ==========
+dist/
+build/
+*.spec
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ========== 编辑器 / 系统 ==========
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ========== 临时文件 ==========
+_*.log
+_shots/
+_pk*/
+*.tmp

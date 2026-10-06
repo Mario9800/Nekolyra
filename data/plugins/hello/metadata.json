@@ -1,0 +1,13 @@
+{
+    "name": "hello",
+    "display_name": "打招呼",
+    "version": "1.0.0",
+    "author": "Nekolyra",
+    "description": "示例插件：被 @ 时回一句问候。可以照这个改出自己的插件。",
+    "entry": "main.py",
+    "tags": ["示例"],
+    "defaults": {
+        "hello_reply": "你好呀，我是Nekolyra。",
+        "hello_suffix": "（本条由插件回复）"
+    }
+}

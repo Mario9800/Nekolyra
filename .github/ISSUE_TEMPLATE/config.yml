@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 加群问问题（最快）
+    url: https://github.com/Mario9800/nekoe
+    about: 交流群 312546565 —— 用不明白、想找人一起折腾、或者只是想聊聊，都欢迎。加群备注「Nekolyra」。
+  - name: 📖 先看 README
+    url: https://github.com/Mario9800/nekoe#常见问题
+    about: 常见问题（连不上 QQ、机器人不回话、语音很慢、记忆没生效、换电脑迁移）都在这里，先看一眼能省不少时间。
+  - name: 📦 下载最新版
+    url: https://github.com/Mario9800/nekoe/releases/latest
+    about: 遇到 Bug 的话，先确认你用的是不是最新版 —— 可能已经修好了。

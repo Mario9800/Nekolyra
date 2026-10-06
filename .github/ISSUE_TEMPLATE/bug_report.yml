@@ -1,0 +1,101 @@
+name: 🐛 报告 Bug
+description: 程序崩溃、报错、功能不正常
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！请尽量把下面的信息填全 —— 尤其是**日志**，
+        没有日志的话定位问题基本靠猜，来回会很多。
+
+        > 如果是**用不明白**而不是**程序出错**，请走
+        > [功能建议](../../issues/new?template=feature_request.yml) 或者直接加群问。
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: 先确认一下
+      options:
+        - label: 我已经搜过现有的 Issue，没有重复的
+          required: true
+        - label: 我看过 README 里的「常见问题」
+          required: true
+
+  - type: dropdown
+    id: edition
+    attributes:
+      label: 你用的是哪个版本
+      options:
+        - 桌面版（下载的 exe，双击运行）
+        - 源码版（python bot.py）
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本号
+      description: 在程序目录的 `VERSION` 文件里，或者 Release 页面上
+      placeholder: 例如 1.0.0.1
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 出了什么问题
+      description: 说清楚你做了什么、期望是什么、实际是什么
+      placeholder: |
+        我在群里 @ 了机器人，期望它回文字，
+        但它回了语音，而且语音内容是乱的。
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 启动 Echo.exe
+        2. 在群里发 '@Nekolyra 你好'
+        3. 看到语音内容是乱码
+    validations:
+      required: false
+
+  - type: textarea
+    id: log
+    attributes:
+      label: 日志（重要）
+      description: |
+        把程序目录下 `startup.log` 的**相关片段**贴在这里。
+        不用全贴，报错前后的几十行就够。
+        如果程序直接闪退，把整个文件拖进来也行。
+      render: text
+      placeholder: |
+        [10-04 18:11:01] [AI] deepseek 连接正常
+        [10-04 18:11:12] [语音] IndexTTS 连接正常
+        ...
+    validations:
+      required: true
+
+  - type: input
+    id: winver
+    attributes:
+      label: 系统版本
+      description: 按 Win+R 输入 `winver` 能看到
+      placeholder: 例如 Windows 11 23H2
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充信息
+      description: |
+        其他可能有用的东西，比如：
+        - 用的哪个 AI 接口（墨点/智谱/Ollama）
+        - 显卡型号、显存大小（语音相关问题很重要）
+        - 报错截图
+    validations:
+      required: false

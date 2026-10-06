@@ -1,0 +1,25 @@
+{
+    "name": "adfilter",
+    "display_name": "广告拦截",
+    "version": "1.0.0",
+    "author": "Nekolyra",
+    "description": "命中关键词/黑域名就撤回、拉黑、踢出，并私聊通知超管。带自带管理页和测试工具。",
+    "entry": "main.py",
+    "tags": ["群管", "安全"],
+    "defaults": {
+        "ad_filter_enabled": true,
+        "ad_hard_keywords": "在线观看\n无限观看\n总裙\n官网入口",
+        "ad_soft_keywords": "温馨提示\n福利\n主播\n网红\n精品",
+        "ad_domains": "",
+        "ad_whitelist_users": "",
+        "ad_whitelist_groups": ""
+    },
+    "config": [
+        {
+            "title": "广告拦截",
+            "fields": [
+                ["ad_filter_enabled", "开启广告拦截", "bool"]
+            ]
+        }
+    ]
+}

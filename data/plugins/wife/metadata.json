@@ -1,0 +1,17 @@
+{
+    "name": "wife",
+    "display_name": "今日老婆",
+    "version": "1.0.0",
+    "author": "Nekolyra",
+    "description": "每天抽一个二次元老婆（带 AI 写的介绍和配图），可以用积分换。原来内置在主程序里，现在是可装卸的插件。",
+    "entry": "main.py",
+    "tags": ["娱乐", "积分"],
+    "defaults": {
+        "wife_enabled": true,
+        "wife_change_limit": 3,
+        "wife_change_cost_base": 1,
+        "wife_intro_enabled": true,
+        "wife_api_url": "https://api.pearapi.ai/api/today_wife",
+        "wife_api_timeout": 15
+    }
+}

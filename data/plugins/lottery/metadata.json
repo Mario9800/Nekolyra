@@ -1,0 +1,14 @@
+{
+    "name": "lottery",
+    "display_name": "抽奖",
+    "version": "1.0.0",
+    "author": "Nekolyra",
+    "description": "从最近活跃的群成员里随机抽一个。原来内置在主程序里，现在是可装卸的插件。",
+    "entry": "main.py",
+    "tags": ["娱乐", "群管"],
+    "defaults": {
+        "lottery_enabled": true,
+        "lottery_active_days": 7,
+        "lottery_cooldown_minutes": 3
+    }
+}
