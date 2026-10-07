@@ -17,5 +17,8 @@
 *.zip  binary
 *.db   binary
 
-# 让 GitHub 别把 .ps1 当成 PowerShell 之外的奇怪语言
-*.ps1  linguist-language=PowerShell
+# .ps1 是给 Windows 用户准备的辅助脚本（装 IndexTTS 运行时之类），
+# 不是这个项目的一部分，**别算进语言统计**。
+# （以前这里写的是 linguist-language=PowerShell —— 那条是"强制标记成
+#   PowerShell"，正好把语言栏里那 1.4% 造出来了。）
+*.ps1  linguist-detectable=false
