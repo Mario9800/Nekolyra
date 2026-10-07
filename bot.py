@@ -13436,7 +13436,6 @@ async function submit(){
   btn.disabled = true; btn.textContent = '保存中…';
   const data = {
     qq: qq, token: token,
-    bot_qq: g('botqq'), bot_secret: g('botsecret'),
     api_key: g('key'), api_host: g('host'), api_model: g('model'),
     voice_url: g('voice')
   };
@@ -13533,37 +13532,23 @@ class _SetupApi:
                 json.dump(cfg, f, ensure_ascii=False, indent=4)
 
             # ---- 写 .env ----
-            bot_qq = str(data.get("bot_qq") or "").strip()
-            bot_secret = str(data.get("bot_secret") or "").strip()
-            if bot_qq:
-                entry = {
-                    "id": bot_qq, "secret": bot_secret,
-                    "intent": {"c2c_group_at_messages": True, "group_members": True},
-                    "use_websocket": True,
-                }
-                qq_bots_line = "QQ_BOTS='" + json.dumps([entry], ensure_ascii=False) + "'"
-            else:
-                qq_bots_line = ("# 填上机器人账号后取消下面这行的注释\n"
-                                "# QQ_BOTS='[{\"id\":\"机器人QQ\",\"secret\":\"密钥\","
-                                "\"intent\":{\"c2c_group_at_messages\":true,"
-                                "\"group_members\":true},\"use_websocket\":true}]'")
+            # ---- 写 .env ----
+            # 只留 onebot/httpx 驱动。以前这里还会写 QQ_BOTS 去配
+            # 腾讯的官方机器人接口，那套已经整个移除了 —— 现在只走
+            # NapCat / Lagrange 这类 OneBot v11 协议端。
             env_path = os.path.join(BASE_DIR, ".env")
             lines = []
-            replaced = False
             if os.path.exists(env_path):
                 with open(env_path, "r", encoding="utf-8",
                           errors="replace") as f:
-                    _env_txt = f.read()
-                for line in _env_txt.splitlines():
-                    if line.strip().startswith("QQ_BOTS") or line.strip().startswith("# QQ_BOTS"):
-                        if not replaced:
-                            lines.append(qq_bots_line)
-                            replaced = True
-                    else:
+                    for line in f.read().splitlines():
+                        # 顺手把以前写进去的 QQ_BOTS 也清掉
+                        if (line.strip().startswith("QQ_BOTS")
+                                or line.strip().startswith("# QQ_BOTS")
+                                or line.strip().startswith("DRIVER=")):
+                            continue
                         lines.append(line)
-            if not replaced:
-                lines.insert(0, "DRIVER=~httpx+~websockets")
-                lines.append(qq_bots_line)
+            lines.insert(0, "DRIVER=~httpx+~websockets")
             with open(env_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(lines) + "\n")
 
@@ -13571,9 +13556,7 @@ class _SetupApi:
             self.done = True
             # 关窗 —— 否则 webview.start() 不返回，重启代码执行不到
             self._close_window_later()
-            msg = "正在重新启动…" if bot_qq else \
-                  "正在重新启动…（机器人 QQ 没填，启动后记得补 .env）"
-            return {"ok": True, "msg": msg}
+            return {"ok": True, "msg": "正在重新启动…"}
         except Exception as e:
             log_startup(f"注册向导保存失败: {type(e).__name__}: {e}")
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}

@@ -1408,7 +1408,6 @@ def main():
     json.dump(cfg, io.open(os.path.join(SB, "config.json"), "w", encoding="utf-8"),
               ensure_ascii=False, indent=4)
     io.open(os.path.join(SB, ".env"), "w", encoding="utf-8").write(
-        "DRIVER=~httpx\nQQ_BOTS='[{\"id\":\"20001\",\"secret\":\"\",\"intent\":"
         "{\"c2c_group_at_messages\":true,\"group_members\":true},"
         "\"use_websocket\":false}]'\n")
     os.makedirs(os.path.join(SB, "data", "plugins"), exist_ok=True)

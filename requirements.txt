@@ -33,12 +33,10 @@ pywebview>=5.0
 #  可选 —— 用到对应功能才需要
 # ------------------------------------------------------------
 
-# 跑 official_bot.py（QQ 官方机器人入口）时需要。
 # bot.py 的 .env 里 DRIVER=~httpx+~websockets 也依赖它 ——
 # 正常会被 uvicorn[standard] 带进来，显式写出来更保险。
 websockets>=13.0
 
-# 图片处理。official_bot.py 用来处理头像/签到图。
 # 没装也能跑，只是少那部分图片功能（代码里有 try/except 兜底）。
 Pillow>=10.0.0
 

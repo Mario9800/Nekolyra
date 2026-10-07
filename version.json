@@ -1,8 +1,8 @@
 {
-  "tag": "v1.0.3.8",
-  "latest": "1.0.3.8",
-  "name": "Nekolyra 1.0.3.8",
-  "url": "https://github.com/awnpw/Nekolyra/releases/tag/v1.0.3.8",
-  "published": "2026-10-06T12:30:00Z",
-  "notes": "### ⚠️ 仓库地址迁移 —— 这一版必须升\n\n项目仓库从 `awnpw/Nekolyra` 转到了 **`awnpw/Nekolyra`**。旧地址会\n301 跳转，`api.github.com` 会跟着跳（所以更新检查暂时还能用），\n但 **jsDelivr 不跟 301** —— 旧版内置的 CDN 兜底地址已经 404。\n\n代码里的 `UPDATE_REPO` / `PLUGIN_MARKET_REPO` 已全部改到新地址。\n**插件注册表也一起改了名**：`nekoe-plugins` → `Nekolyra-plugins`。\n\n### 🟠 QQ 官方机器人（official_bot.py）修了 6 处\n\n| 问题 | 原来 | 现在 |\n|---|---|---|\n| **拿 token 失败直接抛异常** | `raise RuntimeError`，而 **11 个调用方一个 try 都没有** —— 密钥填错/过期/网络抖一下，异常穿过事件循环，整条消息链崩掉 | 失败**返回 None**，11 处全部判空跳过 |\n| 并发刷新 token | 两个协程同时发现过期，各请求一次 | 加 `asyncio.Lock` + 双重检查 |\n| `panel_groups` 静默删数据 | `except: pass`，群不见了日志里一个字都没有 | 打日志，连行数一起报 |\n| 老婆介绍超时内外不一致 | 外层 `wait_for(4.5)`、内层 `httpx timeout=4.0` —— 内层先炸，**外层那句\"生成介绍超时\"是死代码** | 统一成 `AI_INTRO_TIMEOUT` |\n| 昵称兜底写进长缓存 | 接口抖一下，\"用户XXXXXX\" 挂满 12 小时 | 兜底不写缓存，下条消息重试 |\n| 长回复硬截断 | `content[:4000]`，可能切在半个句子上 | 优先断在 `。！？` 等句末标点 |\n| APP_ID 没填 | 带着 `\"YOUR_APP_ID\"` 去请求，拿到 401，日志只有一行 | 启动即明确报错退出 |\n\n### 🟢 日志加了 AI 分段计时\n\n以前日志里只有消息和回复两个时间戳，中间干了什么、各花多久，看不出来。\n现在每次 AI 调用都会记：\n\n```\n[AI] deepseek 首字 2.4s | 总 2.4s | 13 字\n```\n\n**首字慢**是排队/线路问题，**总时长慢**是生成速度问题 —— 分开记才知道该动哪儿。\n\n加这个的当天就用上了：直接量出「中转站首字 24 秒」「有一次 90 秒一个字\n都没吐、撞上硬超时」—— 这两件事以前只能靠猜。\n\n### 🎨 预设背景换图\n\n`极光 / 霜蓝 / 绯樱` 三个渐变预设换成了三张角色插画，名字改成\n`角色 ① / ② / ③`。图片**内嵌在程序里**，但预设只存一个短 URL，\n由新接口 `/admin/api/wallpaper/preset/<id>` 吐出来 —— 这样开外观页\n不会因为预设图多下几百 KB，而且图**可以缓存**。\n\n### 其他\n\n- 版本检查的 CDN 兜底分支从写死 `@main` 改成 `NEKOE_UPDATE_BRANCH` 可配\n- 去掉 `bot.py` 里的品牌痕迹，默认音色名改成通用占位\n  （**已有 config.json 的 `voice_emotion_voices` 会覆盖，语音不受影响**）\n\n### 升级\n\n直接覆盖 `Nekolyra.exe`。**这一版建议尽快升** —— 旧版的 CDN 兜底已经失效。\n\n---"
+  "tag": "v1.0.3.9",
+  "latest": "1.0.3.9",
+  "name": "Nekolyra 1.0.3.9",
+  "url": "https://github.com/awnpw/Nekolyra/releases/tag/v1.0.3.9",
+  "published": "2026-10-06T14:10:00Z",
+  "notes": "### 移除 QQ 官方机器人接口\n\n`official_bot.py`（腾讯官方机器人 API 的另一套独立实现）**整个删掉了**。\n\n原因：那套接口有配额限制、报错信息不友好、而且比 NapCat 那条路少测很多。\n留着只会让配置复杂化 —— 现在只有一条路：**OneBot v11 协议端**\n（NapCat / Lagrange / LLOneBot 都行）。\n\n同时改掉的：\n\n- **首次运行向导**不再问\"机器人 QQ / 密钥\"，也不会往 `.env` 里写 `QQ_BOTS`。\n  启动时还会**顺手清掉**以前写进去的那几行\n- `requirements.txt` 里的相关条目\n- README 里的相关介绍\n\n> 已经配过 `QQ_BOTS` 的话不用管 —— 启动时会自动清掉，NapCat 那边照常用。\n> 如果你确实还在用官方接口，请留在 1.0.3.8，别升这一版。\n\n---"
 }

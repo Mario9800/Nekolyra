@@ -8,13 +8,13 @@
 
 `Windows 桌面版` · `插件化` · `本地优先` · `数据全在自己手里`
 
-<sub>当前版本 <b>1.0.3.8</b> · <a href="CHANGELOG.md">更新日志</a> · <a href="https://github.com/awnpw/Nekolyra/releases/latest">下载最新版</a></sub>
+<sub>当前版本 <b>1.0.3.9</b> · <a href="CHANGELOG.md">更新日志</a> · <a href="https://github.com/awnpw/Nekolyra/releases/latest">下载最新版</a></sub>
 
 </div>
 
-> 它带数据库、带长期记忆、
-> 带知识库检索、带插件运行时、带一个完整的 Web 管理界面
-> 上手要花几分钟配一个 AI 接口和一个 QQ 协议端。
+> **先说清楚** —— 这不是"接个 API 就能回话"的玩具。它带数据库、带长期记忆、
+> 带知识库检索、带插件运行时、带一个完整的 Web 管理界面，还有一个**带签名校验**
+> 的自动更新。上手要花十几分钟配一个 AI 接口和一个 QQ 协议端。
 
 ---
 
@@ -364,7 +364,6 @@ Nekolyra/
 
 ```
 bot.py                    主程序（单文件，约 1.4 万行）
-official_bot.py           QQ 官方机器人接口的另一套实现
 build.py / Nekolyra.spec  打包
 _build_guard.py           发布前 35 项探测
 _sign_release.py          Release 签名（Ed25519）
@@ -472,8 +471,6 @@ pip install -r requirements.txt
 
 **不太成熟的部分**：
 
-- **QQ 官方机器人接口**（`official_bot.py`）—— 能用，但比 NapCat 那条路少测。
-  腾讯的接口有配额限制，报错信息也不友好
 - **语音** —— 依赖 IndexTTS 的部署质量，参考音频不好听起来就很怪
 - **群管** —— 只覆盖常见场景，复杂的权限体系没做
 
