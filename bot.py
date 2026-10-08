@@ -129,6 +129,8 @@ CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 DB_PATH = os.path.join(BASE_DIR, "data", "bot.db")
 BACKUP_DIR = os.path.join(BASE_DIR, "data", "backup")
 VOICE_TMP_DIR = os.path.join(BASE_DIR, "data", "voice_tmp")
+# 表情库：收到的图片/表情落盘在这儿，按内容哈希命名（同一张图只存一份）
+STICKER_DIR = os.path.join(BASE_DIR, "data", "stickers")
 LOG_PATH = os.path.join(BASE_DIR, "startup.log")
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
@@ -243,6 +245,26 @@ DEFAULT_CONFIG = {
     "voice_timeout": 90,
     "voice_random_chance": 0.0,
     "voice_trigger_keywords": ["语音", "说话", "念出来", "读出来", "讲给我听", "voice"],
+    # 允许局域网访问管理界面。
+    # 关着（默认）只监听 127.0.0.1，只有本机能开；
+    # 开了之后监听 0.0.0.0，同一个 WiFi 下的手机/平板就能用浏览器打开 ——
+    # 这就是"手机版"：管理界面本身是网页，手机浏览器直接开就行。
+    # ⚠ 开了等于把整个后台暴露给同网段的人，务必先把 admin_token 换成强密码。
+    "lan_access": False,
+    # ---- 表情库 ----
+    # 收到的图片和表情自动入库，机器人可以在合适的时候发出去。
+    "sticker_enabled": True,
+    "sticker_auto_note": True,      # 用视觉模型自动写备注
+    "sticker_send_enabled": True,   # 允许机器人主动发表情
+    "sticker_max_kb": 2048,         # 单张超过这个大小不入库
+    "sticker_max_count": 2000,      # 数量上限（超了按最久没用淘汰）
+    "sticker_max_mb": 500,          # 总大小上限（MB）
+    "sticker_keep_days": 90,        # 多少天没被用过就清理
+    "sticker_auto_chance": 0.25,    # 情绪匹配时主动发的概率
+    # 可选：GitHub Token（公开仓库只读权限就够）。
+    # 不填也能用 —— 走 api.github.com 未登录的 60 次/小时，用完了会自动
+    # 退到 jsDelivr CDN 兜底。填了是 5000 次/小时，基本撞不到。
+    "github_token": "",
     "voice_max_chars": 200,
     # 情感控制：实测 speaker 模式在短句上几乎不在标点处换气（一口气念完），
     # vector 模式能让停顿数翻倍、断句自然。默认走 vector。
@@ -351,6 +373,11 @@ EDITABLE_KEYS = {
     "voice_emotion_mode", "voice_emotion_vector", "voice_emotion_strength",
     "voice_emotion_voices",
     "voice_postprocess_preset", "voice_postprocess_strength",
+    "lan_access", "github_token",
+    "sticker_enabled", "sticker_auto_note", "sticker_send_enabled",
+    "sticker_max_kb", "sticker_max_count", "sticker_max_mb",
+    "sticker_keep_days",
+    "sticker_auto_chance",
     # 知识库
     "kb_enabled", "kb_auto_inject", "kb_match_threshold", "kb_inject_count",
     "kb_answer_max_chars", "kb_max_per_group",
@@ -554,6 +581,7 @@ if (not SUPERUSERS or not ADMIN_TOKEN or ADMIN_TOKEN == "change-me-please") \
 
 
 import httpx
+from urllib.parse import quote as _urlquote
 import nonebot
 from nonebot import on_notice, on_request, on_message
 from nonebot.rule import Rule
@@ -565,7 +593,56 @@ from nonebot.adapters.onebot.v11 import (
     MessageSegment, Message,
 )
 
-nonebot.init(driver="~fastapi+~websockets", host="127.0.0.1", port=PORT,
+def _bind_host():
+    """管理界面监听哪个地址。
+
+    默认 127.0.0.1 —— 只有本机能开。
+    配置里把 lan_access 打开就变 0.0.0.0 —— 手机连同一个 WiFi 就能用浏览器
+    打开管理页，这就是"手机版"：界面本身是网页，不用另做 App。
+
+    注意：这个函数在 nonebot.init 之前就要用，所以不能调 cfg_bool
+    （那要等配置加载完才可用）。
+    """
+    # 直接读磁盘上的 config.json —— 不能用 CFG 全局变量：
+    # nonebot.init 在模块导入时就执行，那时候 CFG 还没加载。
+    # 也不能用 __file__：打包成 exe 之后它指向 _internal/，
+    # 而 config.json 在 exe 旁边。CONFIG_PATH 是基于 BASE_DIR 的，两边都对。
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        if isinstance(d, dict) and d.get("lan_access"):
+            return "0.0.0.0"
+    except Exception:
+        pass
+    return "127.0.0.1"
+
+
+def _lan_urls(port):
+    """列出局域网里可以打开的地址，方便手机上敲。"""
+    out = []
+    try:
+        import socket as _sk
+        hostname = _sk.gethostname()
+        for info in _sk.getaddrinfo(hostname, None, _sk.AF_INET):
+            ip = info[4][0]
+            if ip.startswith("127.") or ip.startswith("169.254."):
+                continue
+            if ip not in out:
+                out.append(ip)
+        if not out:
+            # getaddrinfo 拿不到就用 UDP 探一下默认出口
+            sk = _sk.socket(_sk.AF_INET, _sk.SOCK_DGRAM)
+            try:
+                sk.connect(("8.8.8.8", 80))
+                out.append(sk.getsockname()[0])
+            finally:
+                sk.close()
+    except Exception:
+        pass
+    return ["http://%s:%d/admin" % (ip, port) for ip in out]
+
+
+nonebot.init(driver="~fastapi+~websockets", host=_bind_host(), port=PORT,
              superusers=SUPERUSERS, log_level="WARNING")
 driver = nonebot.get_driver()
 driver.register_adapter(ONEBOT_V11)
@@ -721,6 +798,79 @@ async def close_http():
             pass
 
 
+def sticker_cleanup(force=False):
+    r"""清理表情库。返回 (删了几条, 删了几个文件, 释放了多少字节)。
+
+    两条规则：
+      ① 超过 sticker_keep_days 天没被用过的（按 last_used 算，没有就按入库时间）
+      ② 总数超过 sticker_max_count 或总大小超过 sticker_max_mb
+         —— 从最久没用的开始淘汰
+
+    只动"没人用过"的，最近用过的最后才碰。
+    """
+    try:
+        keep_days = cfg_int("sticker_keep_days", 90)
+        max_count = cfg_int("sticker_max_count", 2000)
+        max_mb = cfg_int("sticker_max_mb", 500)
+        victims = []
+        if keep_days > 0:
+            victims += DB.sticker_old(days=keep_days, limit=2000)
+        n, total = DB.sticker_count()
+        if n > max_count or total > max_mb * 1024 * 1024:
+            seen = {v["id"] for v in victims}
+            more = DB.sticker_old(days=36500, limit=max(0, n - max_count) + 200)
+            for r in more:
+                if r["id"] not in seen:
+                    victims.append(r)
+                    seen.add(r["id"])
+                left_n = n - len(victims)
+                left_b = total - sum(v.get("size") or 0 for v in victims)
+                if left_n <= max_count and left_b <= max_mb * 1024 * 1024:
+                    break
+        if not victims:
+            if force:
+                log("info", "表情库", "清理：没有需要删的")
+            return 0, 0, 0
+        hashes = DB.sticker_del([v["id"] for v in victims])
+        freed, gone = 0, 0
+        for h in hashes:
+            for ext in ("jpg", "jpeg", "png", "gif", "webp", "bmp"):
+                p = os.path.join(STICKER_DIR, "%s.%s" % (h, ext))
+                if os.path.exists(p):
+                    try:
+                        freed += os.path.getsize(p)
+                        os.remove(p)
+                        gone += 1
+                    except Exception:
+                        pass
+        log("info", "表情库",
+            f"清理：删了 {len(hashes)} 条 / {gone} 个文件，释放 {freed // 1024}KB；"
+            f"剩余 {DB.sticker_count()[0]} 张")
+        return len(hashes), gone, freed
+    except Exception as e:
+        log("warn", "表情库", f"清理失败: {type(e).__name__}: {e}")
+        return 0, 0, 0
+
+
+async def sticker_cleanup_loop():
+    r"""启动 60 秒后先跑一次，之后每 6 小时一次。
+
+    先跑一次是必要的：程序可能是关机很久之后才打开的，
+    期间攒下的过期表情不能等到 6 小时后才清。
+    """
+    first = True
+    while True:
+        try:
+            await asyncio.sleep(60 if first else 6 * 3600)
+            first = False
+            if cfg_bool("sticker_enabled", True):
+                await asyncio.to_thread(sticker_cleanup)
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            log("warn", "表情库", f"定时清理出错: {type(e).__name__}")
+
+
 def _cleanup_voice_files():
     """清理 voice_tmp 目录里的历史临时文件（超过 1 小时的）。"""
     try:
@@ -798,7 +948,47 @@ async def daily_backup_task():
             await asyncio.sleep(3600)
 
 
-async def describe_image(image_url, hint=""):
+def sticker_store(img_bytes, mime="image/jpeg", gid=0, uid=0, nick="",
+                  kind="image", note=""):
+    r"""把一张图落到表情库。返回 (id, 是否新图)，失败返回 (None, False)。
+
+    文件按内容 md5 命名 —— 同一张图在群里发一百次也只占一份。
+    """
+    try:
+        if not cfg_bool("sticker_enabled", True) or not img_bytes:
+            return None, False
+        max_kb = cfg_int("sticker_max_kb", 2048)
+        if len(img_bytes) > max_kb * 1024:
+            return None, False
+        ext = {"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif",
+               "image/webp": "webp", "image/bmp": "bmp"}.get(mime, "jpg")
+        h = hashlib.md5(img_bytes).hexdigest()
+        os.makedirs(STICKER_DIR, exist_ok=True)
+        path = os.path.join(STICKER_DIR, h + "." + ext)
+        if not os.path.exists(path):
+            with open(path, "wb") as f:
+                f.write(img_bytes)
+        sid, is_new = DB.sticker_add(h, ext, len(img_bytes), gid, uid, nick,
+                                     kind, note)
+        if is_new:
+            log("info", "表情库", f"入库 1 张（{kind}，{len(img_bytes)//1024}KB，"
+                                  f"共 {DB.sticker_count()[0]} 张）")
+        return sid, is_new
+    except Exception as e:
+        log("warn", "表情库", f"入库失败: {type(e).__name__}: {e}")
+        return None, False
+
+
+def sticker_path(row):
+    """从一条 stickers 记录拿到磁盘路径。"""
+    try:
+        return os.path.join(STICKER_DIR, str(row.get("hash")) + "."
+                            + str(row.get("ext") or "jpg"))
+    except Exception:
+        return None
+
+
+async def describe_image(image_url, hint="", meta=None):
     if not cfg_bool("vision_enabled", False):
         return None
     image_url = str(image_url or "").strip()
@@ -856,6 +1046,17 @@ async def describe_image(image_url, hint=""):
     elif img_bytes[:4] == b"RIFF" and img_bytes[8:12] == b"WEBP":
         mime = "image/webp"
 
+    # 顺手入库：图已经下载到内存了，存一份到表情库不额外花流量。
+    _sid = None
+    try:
+        _m = meta or {}
+        _sid, _ = sticker_store(img_bytes, mime, gid=int(_m.get("gid") or 0),
+                                uid=int(_m.get("uid") or 0),
+                                nick=str(_m.get("nick") or ""),
+                                kind=str(_m.get("kind") or "image"))
+    except Exception as _e:
+        log("warn", "表情库", f"入库失败: {type(_e).__name__}")
+
     b64 = base64.b64encode(img_bytes).decode("ascii")
     data_url = f"data:{mime};base64,{b64}"
 
@@ -908,6 +1109,13 @@ async def describe_image(image_url, hint=""):
             vision_cache.clear()
         vision_cache[cache_key] = content
         log("success", "识图", f"{size_kb}KB → {content[:60]}")
+        # 把描述回填成表情库备注 —— 用户在表情库里看到的就是这句话。
+        # 入库发生在下载之后、调用模型之前（那时候还没描述），所以在这里补。
+        if _sid and cfg_bool("sticker_auto_note", True):
+            try:
+                DB.sticker_set_note(_sid, note=content[:500])
+            except Exception as _e2:
+                log("warn", "表情库", f"写备注失败: {type(_e2).__name__}")
         return content
     except Exception as e:
         log("error", "识图", f"{type(e).__name__}: {e}")
@@ -927,19 +1135,101 @@ def extract_images(event):
     return urls
 
 
+def tag_image_kind(event):
+    r"""给这条消息里的每张图打类型：表情 or 图片。
+
+    OneBot v11 的 image 段自带 sub_type —— 0 是普通图片，1 是表情/贴纸。
+    不用做图像识别，"是不是表情包"协议端已经告诉我们了。
+    返回 {url: "sticker"|"image"}。
+    """
+    out = {}
+    try:
+        for seg in event.message:
+            if seg.type != "image":
+                continue
+            url = seg.data.get("url") or seg.data.get("file")
+            if not (url and str(url).startswith(("http://", "https://"))):
+                continue
+            st = str(seg.data.get("sub_type") or "0").strip()
+            out[str(url)] = "sticker" if st == "1" else "image"
+    except Exception:
+        pass
+    return out
+
+
+async def grab_image_only(url, meta=None):
+    r"""只下载 + 入库，不调视觉模型。
+
+    识图关着的时候走这条 —— 表情库不该依赖识图开关。
+    """
+    try:
+        client = get_http()
+        max_kb = cfg_int("sticker_max_kb", 2048)
+        async with client.stream("GET", url, timeout=30.0,
+                                 follow_redirects=True) as r:
+            r.raise_for_status()
+            chunks, total = [], 0
+            async for chunk in r.aiter_bytes(64 * 1024):
+                total += len(chunk)
+                if total > max_kb * 1024:
+                    return None
+                chunks.append(chunk)
+        data = b"".join(chunks)
+    except Exception:
+        return None
+    if not data:
+        return None
+    mime = "image/jpeg"
+    if data[:8].startswith(b"\x89PNG"):
+        mime = "image/png"
+    elif data[:4] == b"GIF8":
+        mime = "image/gif"
+    elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        mime = "image/webp"
+    m = meta or {}
+    return sticker_store(data, mime, gid=int(m.get("gid") or 0),
+                         uid=int(m.get("uid") or 0),
+                         nick=str(m.get("nick") or ""),
+                         kind=str(m.get("kind") or "image"))
+
+
 async def enrich_text_with_images(event, text, urls=None):
     # urls 允许调用方传进来：_on_ai 为了判断"是不是空消息"已经算过一次了，
     # 这里再 extract_images(event) 等于把整段 event.message 又扫一遍。
-    if not cfg_bool("vision_enabled", False):
-        return text, False
     if urls is None:
         urls = extract_images(event)
     if not urls:
         return text, False
 
+    # 识图关着的时候也要进表情库 —— 表情库不该依赖识图开关。
+    # 只下载+落盘，不调模型。
+    if not cfg_bool("vision_enabled", False):
+        if cfg_bool("sticker_enabled", True):
+            kinds = tag_image_kind(event)
+            gid = int(getattr(event, "group_id", 0) or 0)
+            uid = int(getattr(event, "user_id", 0) or 0)
+            try:
+                nick = (event.sender.card or event.sender.nickname or "")
+            except Exception:
+                nick = ""
+            for u in urls[:3]:
+                await grab_image_only(u, {"gid": gid, "uid": uid, "nick": nick,
+                                          "kind": kinds.get(u, "image")})
+        return text, False
+
+    kinds = tag_image_kind(event)
+    gid = int(getattr(event, "group_id", 0) or 0)
+    uid = int(getattr(event, "user_id", 0) or 0)
+    try:
+        nick = (event.sender.card or event.sender.nickname or "")
+    except Exception:
+        nick = ""
+
     descs = []
     for u in urls[:3]:
-        d = await describe_image(u)
+        meta = {"gid": gid, "uid": uid, "nick": nick,
+                "kind": kinds.get(u, "image")}
+        d = await describe_image(u, meta=meta)
         if d:
             descs.append(d)
 
@@ -1288,6 +1578,47 @@ def detect_voice_emotion(user_text) -> str:
     if any(kw in t.lower() for kw in _VOICE_EMO_GENERIC):
         return _VOICE_EMO_DEFAULT
     return ""
+
+
+# 情绪 -> 给 TTS 的语气描述（OpenAI 兼容接口的 instructions 参数）。
+#
+# 为什么要有这个：
+#   服务端的真实参数只有 model / input / voice / response_format / speed /
+#   instructions / language 这七个。以前这里传的 emotion_mode / emotion_vector
+#   / emotion_strength / postprocess_* 服务端**全都不认**，直接忽略。
+#   情绪控制实际只有两条路：
+#     1) 换音色 —— 每种情绪单独注册一个参考音频，粒度粗，且音色得一个个录
+#     2) instructions —— 直接把"用什么语气说"交给文本情绪模型，粒度细得多
+#   服务端在显存 < 10GB 时会自动关掉文本情绪模型（use_qwen_emo=False），
+#   那时传 instructions 会直接 400。所以这个表只在服务端开了情绪模型时有用；
+#   真 400 了也不会影响出音，下面有兜底。
+VOICE_EMOTION_INSTRUCTIONS = {
+    "平静": "用平静、自然的语气说",
+    "喜": "用开心、语调上扬的语气说",
+    "惊喜": "用惊喜、难以置信的语气说",
+    "怒": "用生气、语气加重的语气说",
+    "哀": "用难过、低沉的语气说",
+    "低落": "用低落、有气无力的语气说",
+    "惧": "用害怕、声音发颤的语气说",
+    "厌恶": "用嫌弃、不耐烦的语气说",
+}
+
+
+def _emo_dedicated(emotion, voice_name):
+    """当前音色是不是"专为这个情绪注册的"。
+
+    是的话它自带情感参考音频，就不要再传 instructions 了
+    （两者一起传会互相干扰）。判断：映射表给的这个音色跟基础音色不同，
+    而且名字里带着情绪词。
+    """
+    try:
+        base = cfg_str("voice_name").strip()
+        if not voice_name or voice_name == base:
+            return False
+        emo = str(emotion or "").strip()
+        return bool(emo) and emo in str(voice_name)
+    except Exception:
+        return False
 
 
 def emotion_vector_for(emo: str):
@@ -2195,11 +2526,18 @@ async def text_to_voice(text: str, emotion: str = "") -> Optional[str]:
         "speed": speed,
     }
     # 情感控制：不传的话 IndexTTS 走 speaker 模式，短句几乎不在标点处换气
-    # 情绪音色自带情感参考音频，不要再传向量（会互相干扰）
     if not emo_voice:
         _emo = _voice_emotion_payload(emotion)
         if _emo:
             payload.update(_emo)
+
+    # 文本情绪：这个才是服务端真认的参数。
+    # 情绪音色（emo_voice）自带参考音频，跟 instructions 一起传会互相干扰，
+    # 所以那种情况下不传。
+    if emotion and not _emo_dedicated(emotion, voice_name):
+        _instr = VOICE_EMOTION_INSTRUCTIONS.get(str(emotion).strip())
+        if _instr:
+            payload["instructions"] = _instr
 
     # 音频后处理：主要是去刺音（deharsh）/ 变温暖（warm）
     _pp = str(cfg_str("voice_postprocess_preset") or "").strip().lower()
@@ -2298,6 +2636,104 @@ async def try_send_voice(bot, event, reply_text):
                 pass
             _drop_voice_file(p)
         spawn_bg(_later_del(vpath), "语音临时文件清理")
+
+
+def _sticker_prompt_hint(group_id) -> str:
+    """告诉模型"你可以发表情"。
+
+    跟语音那条一个思路：不写进人设（那是用户自己编的），而是运行时追加一段 ——
+    表情库关掉、库里是空的、或者用户禁了主动发送，这段就不出现。
+    """
+    try:
+        if not (cfg_bool("sticker_enabled", True)
+                and cfg_bool("sticker_send_enabled", True)):
+            return ""
+        n, _ = DB.sticker_count()
+        if not n:
+            return ""
+        return (
+            "\n\n【表情包】\n"
+            "你有一个表情库，里面是群里大家发过的表情和图片（每张都带描述）。\n"
+            "当你想表达某种情绪、而文字说不清楚的时候，可以在回复末尾单独加一行：\n"
+            "    [表情:关键词]\n"
+            "关键词用一两个词描述你要的情绪或画面，比如：开心 / 无语 / 猫 / 笑 / 哭 / 比心。\n"
+            "系统会从库里挑一张最接近的发出去。\n"
+            "注意：**别每次都发**，只在真的合适的时候用；不需要就完全不要写这个标记。"
+        )
+    except Exception:
+        return ""
+
+
+def parse_sticker_tag(text):
+    r"""把 [表情:xxx] 从回复里剥出来。返回 (干净文本, 关键词)。
+
+    跟 [情绪:xx] 一样的处理方式 —— 标记是给程序看的，不能留在发出去的文本里。
+    """
+    kw = ""
+    try:
+        m = re.search(r"[\[【]\s*表情\s*[:：]\s*([^\]】\n]{1,20})[\]】]", str(text or ""))
+        if m:
+            kw = m.group(1).strip()
+            text = (str(text)[:m.start()] + str(text)[m.end():])
+        else:
+            # 也接受光秃秃的 [表情]
+            m2 = re.search(r"[\[【]\s*表情\s*[\]】]", str(text or ""))
+            if m2:
+                text = (str(text)[:m2.start()] + str(text)[m2.end():])
+    except Exception:
+        pass
+    return str(text or "").strip(), kw
+
+
+def sticker_file_url(row):
+    """给 NapCat 用的本地文件 URI。"""
+    p = sticker_path(row)
+    if not p or not os.path.exists(p):
+        return ""
+    return "file:///" + p.replace(os.sep, "/")
+
+
+async def try_send_sticker(bot, event, reply_text, force=False):
+    r"""尝试发一张表情。
+
+    返回 (是否发出去了, 剥掉标记后的文本)。
+    第二个值要回传给调用方写进历史 —— 跟语音那条同样的理由：
+    标记留在历史里，模型下一轮会看到自己写过的 [表情:xx]，越写越多。
+    """
+    cleaned, kw = parse_sticker_tag(reply_text)
+    if force:
+        kw = kw or ""
+    if not (cfg_bool("sticker_enabled", True)
+            and cfg_bool("sticker_send_enabled", True)):
+        return False, cleaned
+    if not force and not kw:
+        return False, cleaned
+    try:
+        row = None
+        if kw:
+            # 先按表情找，找不到再放宽到图片
+            cands = DB.sticker_search(kw, kind="sticker", limit=6)
+            if not cands:
+                cands = DB.sticker_search(kw, limit=6)
+            if cands:
+                row = random.choice(cands)
+                log("block", "表情库", f"关键词「{kw}」命中 {len(cands)} 张，挑了 id={row['id']}")
+            else:
+                log("info", "表情库", f"关键词「{kw}」没匹配到")
+        if row is None and force:
+            row = DB.sticker_pick(kind="sticker") or DB.sticker_pick()
+        if row is None:
+            return False, cleaned
+        u = sticker_file_url(row)
+        if not u:
+            log("warn", "表情库", f"id={row['id']} 的文件不在了，跳过")
+            return False, cleaned
+        await bot.send(event, MessageSegment.image(u))
+        DB.sticker_touch(row["id"])
+        return True, cleaned
+    except Exception as e:
+        log("error", "表情库", f"发送失败: {type(e).__name__}: {e}")
+        return False, cleaned
 
 
 async def startup_ai_check():
@@ -2484,6 +2920,7 @@ async def _on_bot_connect(bot):
         spawn_bg(daily_backup_task(), "每日备份")
         spawn_bg(startup_ai_check(), "AI自检")
         spawn_bg(startup_vision_check(), "识图自检")
+        spawn_bg(sticker_cleanup_loop(), "表情库清理")
         spawn_bg(startup_voice_check(), "语音自检")
         spawn_bg(startup_chatlog_prune(), "聊天记录清理")
 
@@ -3524,7 +3961,27 @@ UPDATE_REPO = os.environ.get("NEKOE_UPDATE_REPO", "awnpw/Nekolyra")
 # 带上 token 是 5000 次/小时。普通用户不用管（有缓存，一天就几次），
 # 但如果机器人频繁重启、或者同一 IP 上还有别的工具在打 GitHub，就会撞上限。
 # 只要只读权限，不需要任何 scope。
-UPDATE_TOKEN = os.environ.get("NEKOE_UPDATE_TOKEN", "").strip()
+def _update_token():
+    """GitHub Token：环境变量优先，其次 config.json 里的 github_token。
+
+    为什么需要它：api.github.com 未登录只有 60 次/小时、而且按 IP 算，
+    同一台机器上别的脚本（比如我调试用的那些）把配额打满之后，
+    管理页检查更新就只剩一条 403。填了 token 之后是 5000 次/小时。
+
+    做成函数而不是模块变量 —— 管理页改完配置是热重载的，
+    写成变量的话改了要重启才生效。
+    """
+    try:
+        t = os.environ.get("NEKOE_UPDATE_TOKEN", "").strip()
+        if t:
+            return t
+        return str((CFG or {}).get("github_token") or "").strip()
+    except Exception:
+        return ""
+
+
+# 兼容老写法：模块导入时取一次（其余地方都用 _update_token()）
+UPDATE_TOKEN = _update_token()
 
 # 下载更新包的源。GitHub 在国内直连不稳定，"加速节点"是公益反代，
 # 走它们能快很多 —— 但**第三方有能力替换你下到的 exe**，
@@ -3593,7 +4050,12 @@ def _save_market_cache():
 _VER_CACHE = {"ts": 0.0, "data": None, "error": "", "fail_ts": 0.0,
               "last_force": 0.0}
 _VER_TTL = 1800             # 成功结果缓存 30 分钟
-_VER_FAIL_TTL = 300         # 失败也缓存 5 分钟 —— 不然一直重试，配额烧得飞快
+_VER_FAIL_TTL = 300         # 首次失败缓存 5 分钟
+# 连续失败就往上翻倍（5min -> 15 -> 30 -> 60 封顶）。
+# 未登录的 api.github.com 是每小时 60 次、而且按 IP 算 —— 撞上限之后
+# 每 5 分钟重试一次只是白白刷日志，等一小时自然就恢复了。
+_VER_FAIL_BACKOFF = [300, 900, 1800, 3600]
+_VER_FAIL_COUNT = 0
 _VER_FORCE_MIN_GAP = 60     # 手动「重新检查」最短间隔，防连点
 
 
@@ -3657,22 +4119,27 @@ async def fetch_latest_release(force=False):
         force = False
     if force:
         _VER_CACHE["last_force"] = now
+    # 失败退避：**强制检查也要等**。
+    # 之前这段写在 `if not force:` 里面，于是管理页每次强制刷新都真打一次
+    # GitHub API —— 配额已经用完的情况下，重试没有任何意义，只是继续烧
+    # 日志和配额（实测 10 秒内刷了两条一样的告警）。
+    # 手动连点仍然由上面的 _VER_FORCE_MIN_GAP 单独管着。
+    _fttl = _VER_CACHE.get("fail_ttl") or _VER_FAIL_TTL
+    if (_VER_CACHE["data"] is None and _VER_CACHE["fail_ts"]
+            and now - _VER_CACHE["fail_ts"] < _fttl):
+        return None
     if not force:
         if (_VER_CACHE["data"] is not None
                 and now - _VER_CACHE["ts"] < _VER_TTL):
             return _VER_CACHE["data"]
-        # 上次失败也冷静一会儿。否则每次开管理页都重试一遍，
-        # 遇上 403（配额用完）会越试越糟。
-        if (_VER_CACHE["data"] is None and _VER_CACHE["fail_ts"]
-                and now - _VER_CACHE["fail_ts"] < _VER_FAIL_TTL):
-            return None
     out, err = None, ""
     try:
         cli = get_http()
         _h = {"Accept": "application/vnd.github+json",
               "User-Agent": _ua()}
-        if UPDATE_TOKEN:
-            _h["Authorization"] = "Bearer " + UPDATE_TOKEN
+        _tk = _update_token()
+        if _tk:
+            _h["Authorization"] = "Bearer " + _tk
         r = await cli.get(
             f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest",
             headers=_h, timeout=12.0)
@@ -3714,15 +4181,27 @@ async def fetch_latest_release(force=False):
         fb = await _fetch_version_json()
         if fb is not None:
             out = fb
-            log("info", "更新", f"GitHub API 不可用（{err}），已用 CDN 兜底")
+            # 这是**正常兜底**，不是故障 —— 措辞上别吓人。
+            log("info", "更新",
+                f"官方接口限流（{err}），已自动改用 CDN 兜底，不影响使用")
     if out is not None:
         _VER_CACHE["data"] = out
         _VER_CACHE["ts"] = now
         _VER_CACHE["error"] = ""
     else:
         _VER_CACHE["error"] = err
+        # 连续失败就退避 —— 别每 5 分钟往日志里刷同一条
+        global _VER_FAIL_COUNT
+        _VER_FAIL_COUNT = min(_VER_FAIL_COUNT + 1, len(_VER_FAIL_BACKOFF))
         _VER_CACHE["fail_ts"] = now
-        log("warn", "更新", f"检查更新失败：{err}")
+        _VER_CACHE["fail_ttl"] = _VER_FAIL_BACKOFF[_VER_FAIL_COUNT - 1]
+        if _VER_FAIL_COUNT <= 2:
+            log("warn", "更新", f"检查更新失败：{err}")
+        elif _VER_FAIL_COUNT == 3:
+            log("warn", "更新",
+                "检查更新连续失败，接下来一小时不再重试（不影响机器人运行）")
+    if out is not None:
+        _VER_FAIL_COUNT = 0
     return out
 
 
@@ -4366,6 +4845,23 @@ class Database:
                 created_at TEXT NOT NULL)""")
             c.execute("CREATE INDEX IF NOT EXISTS idx_log_g ON chat_log(group_id, id DESC)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_log_u ON chat_log(user_id, id DESC)")
+            # 表情库：收到的图片/表情。文件按 hash 存 STICKER_DIR，这里只记元数据。
+            c.execute("""CREATE TABLE IF NOT EXISTS stickers(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                hash TEXT NOT NULL UNIQUE,
+                ext TEXT NOT NULL DEFAULT 'jpg',
+                size INTEGER NOT NULL DEFAULT 0,
+                group_id INTEGER NOT NULL DEFAULT 0,
+                user_id INTEGER NOT NULL DEFAULT 0,
+                nickname TEXT DEFAULT '',
+                kind TEXT NOT NULL DEFAULT 'image',
+                note TEXT DEFAULT '',
+                tags TEXT DEFAULT '',
+                use_count INTEGER NOT NULL DEFAULT 0,
+                last_used TEXT,
+                created_at TEXT NOT NULL)""")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_st_kind ON stickers(kind, id DESC)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_st_used ON stickers(last_used)")
             c.execute("""CREATE TABLE IF NOT EXISTS points(
                 user_id INTEGER NOT NULL, group_id INTEGER NOT NULL,
                 points INTEGER DEFAULT 0, sign_count INTEGER DEFAULT 0,
@@ -4773,6 +5269,119 @@ class Database:
             cur = c.execute("DELETE FROM kb WHERE id=?", (int(kid),))
             c.commit()
             return cur.rowcount > 0
+
+    # ---------------- 表情库 ----------------
+    def sticker_add(self, h, ext, size, gid=0, uid=0, nick="", kind="image",
+                    note="", now=None):
+        """入库。同一张图（hash 相同）只记一条，重复发只更新来源。"""
+        now = now or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._conn() as c:
+            row = c.execute("SELECT id FROM stickers WHERE hash=?", (h,)).fetchone()
+            if row:
+                c.execute("UPDATE stickers SET use_count=use_count+1, "
+                          "last_used=? WHERE id=?", (now, row["id"]))
+                return row["id"], False
+            cur = c.execute(
+                "INSERT INTO stickers(hash,ext,size,group_id,user_id,nickname,"
+                "kind,note,tags,created_at) VALUES(?,?,?,?,?,?,?,?,'',?)",
+                (h, ext, size, gid, uid, nick, kind, note, now))
+            return cur.lastrowid, True
+
+    def sticker_set_note(self, sid, note=None, tags=None):
+        with self._conn() as c:
+            if note is not None:
+                c.execute("UPDATE stickers SET note=? WHERE id=?", (note, sid))
+            if tags is not None:
+                c.execute("UPDATE stickers SET tags=? WHERE id=?", (tags, sid))
+
+    def sticker_del(self, ids):
+        """删记录，返回被删掉的 hash 列表（文件由调用方删）。"""
+        if not ids:
+            return []
+        with self._conn() as c:
+            qs = ",".join("?" * len(ids))
+            rows = c.execute("SELECT hash FROM stickers WHERE id IN (%s)" % qs,
+                             tuple(ids)).fetchall()
+            c.execute("DELETE FROM stickers WHERE id IN (%s)" % qs, tuple(ids))
+            return [r["hash"] for r in rows]
+
+    def sticker_list(self, kind="", gid=0, kw="", limit=200, offset=0):
+        sql = "SELECT * FROM stickers WHERE 1=1"
+        args = []
+        if kind:
+            sql += " AND kind=?"
+            args.append(kind)
+        if gid:
+            sql += " AND group_id=?"
+            args.append(gid)
+        if kw:
+            sql += " AND (note LIKE ? OR tags LIKE ?)"
+            args += ["%" + kw + "%", "%" + kw + "%"]
+        sql += " ORDER BY id DESC LIMIT ? OFFSET ?"
+        args += [limit, offset]
+        with self._conn() as c:
+            return [dict(r) for r in c.execute(sql, tuple(args)).fetchall()]
+
+    def sticker_count(self):
+        with self._conn() as c:
+            r = c.execute("SELECT COUNT(*) n, COALESCE(SUM(size),0) s "
+                          "FROM stickers").fetchone()
+            return r["n"], r["s"]
+
+    def sticker_by_hash(self, h):
+        with self._conn() as c:
+            r = c.execute("SELECT * FROM stickers WHERE hash=?", (h,)).fetchone()
+            return dict(r) if r else None
+
+    def sticker_touch(self, sid):
+        with self._conn() as c:
+            c.execute("UPDATE stickers SET use_count=use_count+1, last_used=? "
+                      "WHERE id=?",
+                      (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), sid))
+
+    def sticker_search(self, kw, kind="", limit=6):
+        r"""按关键词找表情：先匹配标签，再匹配备注。
+
+        标签是人工/机器人整理的（"开心""无语""猫"这种），命中优先；
+        备注是视觉模型写的一整段描述，用来兜底。
+        """
+        kw = str(kw or "").strip()
+        if not kw:
+            return []
+        like = "%" + kw + "%"
+        sql = ("SELECT * FROM stickers WHERE (tags LIKE ? OR note LIKE ?)")
+        args = [like, like]
+        if kind:
+            sql += " AND kind=?"
+            args.append(kind)
+        # 标签命中排在备注命中前面
+        sql += (" ORDER BY CASE WHEN tags LIKE ? THEN 0 ELSE 1 END,"
+                " use_count ASC, RANDOM() LIMIT ?")
+        args += [like, int(limit)]
+        with self._conn() as c:
+            return [dict(r) for r in c.execute(sql, tuple(args)).fetchall()]
+
+    def sticker_pick(self, kind=""):
+        """随机挑一张 —— AI 挑不出来时的兜底。"""
+        with self._conn() as c:
+            sql = "SELECT * FROM stickers"
+            args = ()
+            if kind:
+                sql += " WHERE kind=?"
+                args = (kind,)
+            sql += " ORDER BY RANDOM() LIMIT 1"
+            r = c.execute(sql, args).fetchone()
+            return dict(r) if r else None
+
+    def sticker_old(self, days=90, limit=500):
+        """太久没用的，按最久没用排前面。"""
+        cutoff = (datetime.now() - timedelta(days=days)
+                  ).strftime("%Y-%m-%d %H:%M:%S")
+        with self._conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM stickers WHERE COALESCE(last_used, created_at) < ? "
+                "ORDER BY COALESCE(last_used, created_at) ASC LIMIT ?",
+                (cutoff, limit)).fetchall()]
 
     def kb_touch(self, kid):
         """命中计数 +1"""
@@ -5189,6 +5798,9 @@ class AIHandler:
             return None
         sys_p = self._build_persona(mode)
         if mode == "group" and group_id is not None:
+            _sh = _sticker_prompt_hint(group_id)
+            if _sh:
+                sys_p += _sh
             _vh = _voice_prompt_hint(group_id)
             if _vh:
                 sys_p += "\n\n" + _vh
@@ -6124,6 +6736,9 @@ async def _on_private(bot: Bot, event: PrivateMessageEvent):
         # spoken 就还是这个初值 —— 不剥的话上下文和记忆流水里会存带标签的版本
         spoken = parse_emotion_tag(reply)[0] or reply
         try:
+            # 发表情要排在语音前面：语音会念"剥掉标记后"的文本，
+            # 标记要是还留在 reply 里，会被念出来（"[表情:开心]"）。
+            sticker_sent, reply = await try_send_sticker(bot, event, reply)
             voice_sent, spoken = await try_send_voice(bot, event, reply)
         except Exception as e:
             log("warn", "语音", f"私聊语音失败，降级文字: {type(e).__name__}: {e}")
@@ -6481,6 +7096,32 @@ async def handle_group_command(bot, event, cmd):
     return False
 
 
+def _sticker_cmd_rule(event: GroupMessageEvent) -> bool:
+    """「发个表情」这类要求。
+
+    注解必须写全 —— nonebot2 的 Rule 会反射回调的参数类型，
+    裸 lambda 或者没注解都会抛 ValueError: Unknown parameter e。
+    """
+    try:
+        t = event.get_plaintext().strip()
+        if len(t) > 12:
+            return False
+        return any(k in t for k in ("发个表情", "来张表情", "整个表情",
+                                    "发张表情", "来个表情", "发表情"))
+    except Exception:
+        return False
+
+
+sticker_cmd = on_message(rule=Rule(_sticker_cmd_rule), priority=4, block=True)
+
+
+@sticker_cmd.handle()
+async def _on_sticker_cmd(bot: Bot, event: GroupMessageEvent):
+    sent, _ = await try_send_sticker(bot, event, "", force=True)
+    if not sent:
+        await bot.send(event, "表情库还是空的，等群里有人发图或者发表情就有了。")
+
+
 ai_chat = on_message(rule=Rule(_is_group), priority=10, block=False)
 
 
@@ -6603,6 +7244,9 @@ async def _on_ai(bot: Bot, event: GroupMessageEvent):
         voice_sent = False
         spoken = parse_emotion_tag(reply)[0] or reply
         try:
+            # 发表情要排在语音前面：语音会念"剥掉标记后"的文本，
+            # 标记要是还留在 reply 里，会被念出来（"[表情:开心]"）。
+            sticker_sent, reply = await try_send_sticker(bot, event, reply)
             voice_sent, spoken = await try_send_voice(bot, event, reply)
         except Exception as e:
             log("warn", "语音", f"群语音失败，降级文字: {type(e).__name__}: {e}")
@@ -7040,6 +7684,136 @@ async def _send_voice_impl(gid, text):
 
 
 
+@app.get("/admin/api/stickers")
+async def api_stickers(token: str = "", kind: str = "", gid: int = 0,
+                       kw: str = "", limit: int = 120, offset: int = 0):
+    """表情库列表。"""
+    if not _auth(token):
+        return JSONResponse({"error": "invalid"}, status_code=401)
+    try:
+        limit = max(1, min(int(limit), 500))
+        offset = max(0, int(offset))
+    except (TypeError, ValueError):
+        limit, offset = 120, 0
+    items = DB.sticker_list(kind=(kind or "").strip(), gid=int(gid or 0),
+                            kw=(kw or "").strip(), limit=limit, offset=offset)
+    n, total_bytes = DB.sticker_count()
+    # <img> 带不了请求头，所以把 token 拼进 URL —— 跟壁纸接口一个办法
+    q = _urlquote(token or "", safe="")
+    for it in items:
+        it["url"] = "/admin/api/sticker/%s?token=%s" % (it.get("hash"), q)
+    return JSONResponse({
+        "items": items, "count": len(items),
+        "total": n, "bytes": total_bytes,
+        "max_count": cfg_int("sticker_max_count", 2000),
+        "max_mb": cfg_int("sticker_max_mb", 500),
+        "enabled": cfg_bool("sticker_enabled", True),
+        "send_enabled": cfg_bool("sticker_send_enabled", True),
+    })
+
+
+@app.post("/admin/api/stickers/cleanup")
+async def api_sticker_cleanup(token: str = ""):
+    """手动跑一次清理。"""
+    if not _auth(token):
+        return JSONResponse({"error": "invalid"}, status_code=401)
+    try:
+        a, b, c = await asyncio.to_thread(sticker_cleanup, True)
+    except Exception as e:
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"},
+                            status_code=500)
+    n, total = DB.sticker_count()
+    return JSONResponse({"ok": True, "deleted": a, "files": b,
+                         "freed_kb": c // 1024, "left": n,
+                         "bytes": total})
+
+
+@app.get("/admin/api/sticker/{h}")
+async def api_sticker_img(h: str, token: str = ""):
+    """读一张表情的原图。"""
+    if not _auth(token):
+        return JSONResponse({"error": "invalid"}, status_code=401)
+    row = DB.sticker_by_hash(str(h or "").strip())
+    if not row:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    p = sticker_path(row)
+    if not p or not os.path.exists(p):
+        return JSONResponse({"error": "文件不在了"}, status_code=404)
+    mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+            "gif": "image/gif", "webp": "image/webp",
+            "bmp": "image/bmp"}.get(str(row.get("ext") or "jpg").lower(),
+                                    "image/jpeg")
+    try:
+        with open(p, "rb") as f:
+            data = f.read()
+    except Exception as e:
+        return JSONResponse({"error": f"{type(e).__name__}"}, status_code=500)
+    return Response(content=data, media_type=mime,
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.post("/admin/api/stickers/note")
+async def api_sticker_note(token: str = "", request: Request = None):
+    """改备注 / 标签。"""
+    if not _auth(token):
+        return JSONResponse({"error": "invalid"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "invalid body"}, status_code=400)
+    try:
+        sid = int(body.get("id") or 0)
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "id 必须是数字"}, status_code=400)
+    if not sid:
+        return JSONResponse({"error": "缺少 id"}, status_code=400)
+    note = body.get("note")
+    tags = body.get("tags")
+    DB.sticker_set_note(sid,
+                        note=None if note is None else str(note)[:1000],
+                        tags=None if tags is None else str(tags)[:300])
+    return JSONResponse({"ok": True})
+
+
+@app.post("/admin/api/stickers/delete")
+async def api_sticker_delete(token: str = "", request: Request = None):
+    """删除（连磁盘文件一起删）。"""
+    if not _auth(token):
+        return JSONResponse({"error": "invalid"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "invalid body"}, status_code=400)
+    raw = body.get("ids") or []
+    if not isinstance(raw, list):
+        return JSONResponse({"error": "ids 必须是数组"}, status_code=400)
+    ids = []
+    for x in raw[:500]:
+        try:
+            ids.append(int(x))
+        except (TypeError, ValueError):
+            pass
+    if not ids:
+        return JSONResponse({"error": "没有有效的 id"}, status_code=400)
+    hashes = DB.sticker_del(ids)
+    gone = 0
+    for h in hashes:
+        for ext in ("jpg", "jpeg", "png", "gif", "webp", "bmp"):
+            p = os.path.join(STICKER_DIR, "%s.%s" % (h, ext))
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                    gone += 1
+                except Exception:
+                    pass
+    log("info", "表情库", f"删了 {len(hashes)} 条记录、{gone} 个文件")
+    return JSONResponse({"ok": True, "deleted": len(hashes), "files": gone})
+
+
 @app.get("/api/vision/test")
 async def api_vision_test(token: str = "", url: str = ""):
     if not _auth(token): return JSONResponse({"error": "invalid token"}, status_code=401)
@@ -7452,9 +8226,23 @@ GALLERY_CSS = r'''
   width:19px;height:19px;border-radius:50%;background:var(--azure);
   color:var(--on-accent);font-size:11px;font-weight:700;
   display:flex;align-items:center;justify-content:center}
-.wall-thumb b{position:absolute;left:0;right:0;bottom:0;padding:18px 8px 6px;
+.wall-thumb b{position:absolute;
+  /* 卡片有 2px 边框，而 absolutely 定位的 bottom:0 是相对"内边距盒"算的 ——
+     所以标签会停在边框内侧，底下永远差 2px 露一条缝（实测就是这个数）。
+     往外扩 2px 盖住边框，视觉上才真正"占满"。 */
+  left:-2px;right:-2px;bottom:-2px;
+  margin:0;padding:20px 9px 9px;
   font-size:11px;font-weight:600;color:#fff;letter-spacing:.01em;
-  background:linear-gradient(transparent,rgba(0,0,0,.62))}
+  /* 实底：底部要完全不透明，中间过渡，顶部透明 ——
+     原来是 linear-gradient(transparent, rgba(0,0,0,.62))，最深处也只有
+     62% 黑，缩略图里人物的身体会从标签底下透上来，看着像"没铺满"。 */
+  background:linear-gradient(180deg,
+    rgba(0,0,0,0) 0%,
+    rgba(0,0,0,.55) 45%,
+    rgba(0,0,0,.86) 100%);
+  border-radius:0 0 var(--radius-sm) var(--radius-sm);
+  text-shadow:0 1px 3px rgba(0,0,0,.5);
+  box-sizing:border-box}
 .wall-empty{padding:22px 0;text-align:center;font-size:12.5px;
   color:var(--text-3);border:1px dashed var(--line-3);
   border-radius:var(--radius-sm)}
@@ -7723,6 +8511,7 @@ FIX_CSS = r'''
 
 /* 9. 浅色模式：用户实际看的是这套。玻璃加厚，壁纸留在四周和缝里 */
 @media (prefers-color-scheme: light){
+  :root{
         --glass-line:rgba(10,14,26,.10);
         --glass-hi:inset 0 1px 0 rgba(255,255,255,.9);
         --glass-shadow:0 6px 26px rgba(8,14,32,.10)}
@@ -7767,6 +8556,216 @@ HERO_CSS = r'''
   text-transform:uppercase;color:var(--text-3)}
 '''
 
+
+# ================= 手机端适配 =================
+# 拼在所有 CSS 之后，所以这里的规则优先级最高。
+# 全部包在 @media 里 —— 桌面上打开完全不受影响。
+MOBILE_CSS = r'''/* ================= 手机端适配（窄屏专用） =================
+   全部包在 @media (max-width: 900px) 里 —— 宽屏打开时这些规则完全不参与。
+   这是重写版：上一版少了一个 { 多了一个 }，导致 @media 提前闭合，
+   后面的规则全被解析器丢掉，手机上看着像"没生效"。 */
+
+@media (max-width: 900px){
+
+/* ---- 1. 整体留白：竖向空间很贵 ---- */
+.app{padding:0;gap:0}
+.content{
+  padding-top:10px;
+  padding-left:max(8px, env(safe-area-inset-left));
+  padding-right:max(8px, env(safe-area-inset-right));
+  padding-bottom:calc(88px + env(safe-area-inset-bottom));
+}
+
+/* ---- 2. 侧栏：只剩图标 ----
+   真机截图确认：菜单项的 <span> 已经被隐藏（能看到图标），
+   但【分组标签】.nav-section（监控/群管理/配置/扩展）还竖着排成一列，
+   那才是"太挤"的来源 —— 这里一起隐藏。
+   原来的 .nav-item{font-size:0} 压不住带显式字号的 <span>。 */
+.side{width:52px;padding:10px 5px 8px}
+.side .brand{padding:8px 3px}
+.side .brand > :not(.ico):not(svg){display:none}
+.side .nav-section{display:none}          /* ← 分组标签，真机上竖排的就是它 */
+.side .nav-item{justify-content:center;padding:10px 0;gap:0}
+.side .nav-item > span{display:none}
+.side .nav-item .ico{width:20px;height:20px}
+.side .nav{padding:6px 4px 0}
+.side-foot{font-size:0;padding:6px 0;margin:0 6px 8px}
+.side-foot .dot-live{width:8px;height:8px}
+
+/* ---- 3. 卡片必须有不透明底色 ----
+   手机浏览器的 backdrop-filter 支持参差不齐（省电模式会主动关掉），
+   关掉之后毛玻璃变成全透明，壁纸直接透上来，字根本看不清。 */
+.card,.stat-box,.api-result,.log-box,.table-wrap{
+  background:var(--card-solid) !important;
+  backdrop-filter:none !important;
+  -webkit-backdrop-filter:none !important;
+}
+
+/* ---- 4. 统计格：两列，字号收小，别把 "2m 4…" 裁掉 ---- */
+.stat-grid{grid-template-columns:repeat(2,minmax(0,1fr)) !important;
+           gap:8px !important}
+.stat-box{padding:12px 10px !important;min-width:0 !important}
+.stat-box .v{font-size:24px !important;line-height:1.15 !important;
+             overflow-wrap:anywhere}
+.stat-box .lbl,.stat-box .sub{font-size:11px !important;
+                              white-space:normal !important}
+
+/* ---- 4.5 通用：窄屏下"横向排"的容器要能收纳 ----
+   真机截图暴露的一类问题：插件名"关键词回复"被压成一字一列，
+   "运行中/工具/群管"这些小标签也是竖排的，知识库的左右两栏挤在一起。
+   根因都一样 —— 桌面上是一行 flex 排开的，手机宽度只有一半，
+   里面的文字元素被挤到只剩一个字宽。
+
+   这里不逐个找 class（各页面命名不统一），改用通用规则：
+     · 卡片里所有容器一律允许换行（wrap 只会"允许"，不会强行改变布局）
+     · 名字/标题/说明类元素占满整行，且允许断词
+     · 标签/徽章类元素禁止逐字换行 */
+.card div,.card section,.card li,.card header,.card footer,.card p,
+.plugin-item,.plugin-card{
+  flex-wrap:wrap !important;
+}
+.card [class*="name"],.card [class*="title"],.card [class*="desc"],
+.card [class*="info"],.card h3,.card h4{
+  min-width:0 !important;
+  white-space:normal !important;
+  word-break:break-word !important;
+}
+[class*="tag"],[class*="badge"],[class*="pill"],[class*="chip"],
+[class*="state"],[class*="status"]{
+  white-space:nowrap !important;
+}
+
+/* 知识库页：桌面上是"左树 + 右操作面板"两栏，手机上必须上下堆叠，
+   否则右栏被壁纸盖住一半，按钮都点不到。 */
+#page-kb .card > div,
+#page-kb > .card > div{
+  flex-direction:column !important;
+  align-items:stretch !important;
+}
+#page-kb [class*="tree"]{max-width:100% !important;width:100% !important}
+
+/* ---- 4.7 通配 box-sizing ----
+   "宽度 100% + 左右 padding" 在默认的 content-box 下实际宽度是
+   100% + padding，必然溢出。搜索框伸出屏幕就是这个原因。
+   这条必须用通配符，逐个写会漏。 */
+*,*::before,*::after{box-sizing:border-box}
+html,body{width:100%;max-width:100%;overflow-x:hidden}
+.app,.main,.content,.page,.card,.card > *{
+  width:100% !important;
+  max-width:100% !important;
+  min-width:0 !important;
+  box-sizing:border-box !important;
+}
+/* 表单控件一律占满可用宽度，不再有"固定像素宽"的东西 */
+input,textarea,select{width:100% !important;max-width:100% !important}
+/* 表格自己滚，不要顶破外层 */
+table{max-width:100% !important}
+.table-wrap,[class*="table-wrap"],[class*="tableWrap"]{
+  width:100% !important;max-width:100% !important;
+  overflow-x:auto !important;-webkit-overflow-scrolling:touch;
+}
+
+/* ---- 4.8 最后一道防线：不许任何东西比屏幕宽 ----
+   真机截图：搜索框和表格整行都伸出屏幕右边，而整页没有横向滚动条，
+   伸出去的部分被直接裁掉 —— 表现就是"文字看不到"。
+   这里从根上堵住：页面容器不许横向溢出，能滚的只有表格自己。 */
+html,body{max-width:100%;overflow-x:hidden}
+.page,.content,.card,.main{max-width:100% !important;min-width:0 !important}
+input,textarea,select,button{
+  max-width:100% !important;
+  box-sizing:border-box !important;
+}
+/* 行内排版的东西超宽就自己滚，不要顶破外层 */
+.table-wrap,.kb-table-wrap,[class*="table-wrap"]{
+  overflow-x:auto !important;-webkit-overflow-scrolling:touch;
+  max-width:100% !important;
+}
+
+/* ---- 5. 表格：横向滑动，别把页面撑破 ---- */
+table{display:block;overflow-x:auto;white-space:nowrap;
+      -webkit-overflow-scrolling:touch;max-width:100%}
+thead,tbody{display:table;width:100%;min-width:max-content}
+th,td{padding:8px 10px;font-size:13px}
+
+/* ---- 6. 顶部 tab：同样横向滑动 ---- */
+.tabs,.tab-bar,.seg{overflow-x:auto;overflow-y:hidden;
+                    flex-wrap:nowrap !important;
+                    -webkit-overflow-scrolling:touch}
+.tabs > *,.tab-bar > *,.seg > *{flex:0 0 auto;white-space:nowrap}
+
+/* ---- 7. 触摸目标 ---- */
+.btn,button,.nav-item,input[type=submit]{min-height:42px}
+.btn.sm{min-height:36px;padding:8px 12px}
+.btn svg,.btn .ico{pointer-events:none}
+
+/* ---- 8. 输入框字号必须 >=16px ----
+   iOS Safari 在 <16px 的输入框聚焦时会自动放大整个页面。 */
+input,select,textarea{font-size:16px !important}
+
+/* ---- 9. 表单和卡片 ---- */
+.card{padding:14px 12px}
+.form-grid{grid-template-columns:1fr !important}
+
+/* ---- 10. 悬浮按钮别盖住最后一行 ---- */
+.fab-bar{right:10px;bottom:calc(10px + env(safe-area-inset-bottom));
+         padding:5px;border-radius:10px}
+
+/* ---- 11. 弹窗占满 ---- */
+.modal,.dialog{width:auto !important;max-width:none !important;
+               margin:8px;max-height:92vh;overflow-y:auto}
+
+/* ---- 12. 日志：真机上被挤成一条窄柱 ----
+   日志行是「时间 | 级别 | 正文」三栏排的，时间戳和级别占了固定宽度，
+   手机上正文只剩一小条，一句话被拆成四五行，看着像"字丢了"。
+   这里把每一行改成竖排：时间+级别一行，正文自己占满一行。 */
+.log-box,.logs{font-size:12px !important;line-height:1.55 !important}
+.log-line,.log-row,.logitem,li.log{
+  display:block !important;
+  white-space:normal !important;
+  word-break:break-word !important;
+  padding:7px 9px !important;
+  line-height:1.55 !important;
+}
+/* 行内的几栏各自占满，别再横向挤。
+   这里是通用写法 —— 不用知道里面到底叫什么 class：
+   前几栏（时间/级别）按内容宽，最后一栏（正文）强制占满一行。 */
+.log-line > *,.log-row > *{display:inline !important;margin-right:6px}
+.log-line,.log-row{display:flex !important;flex-wrap:wrap !important;
+                   align-items:baseline !important;gap:2px 6px !important}
+.log-line > *:last-child,.log-row > *:last-child{
+  flex:1 1 100% !important;display:block !important;margin-right:0 !important;
+  white-space:pre-wrap !important;word-break:break-word !important}
+.log-time,.log-lv,.log-level{font-size:11px !important;opacity:.75}
+.log-msg,.log-text,.log-content{display:block !important;
+                                margin-top:2px;
+                                white-space:pre-wrap !important;
+                                word-break:break-word !important}
+pre,code{font-size:12px !important}
+
+/* ---- 13. 标题省空间 ---- */
+.page-title,.content > h1{font-size:17px;margin:4px 0 10px}
+
+/* ---- 14. 长文本别撑宽 ---- */
+pre,code{white-space:pre-wrap;word-break:break-word}
+img,video,svg,canvas{max-width:100%;height:auto}
+.page,.content > *{min-width:0;max-width:100%}
+
+}
+
+/* 卡片底色。浅色和暗色都要定义 —— 只定义一边的话，另一边
+   var(--card-solid) 取不到值，整条 background 声明会被判为无效，
+   卡片就变成透明的，壁纸直接透上来。 */
+:root{--card-solid:rgba(255,255,255,.97)}
+@media (prefers-color-scheme: dark){
+  :root{--card-solid:rgba(24,27,34,.97)}
+}
+
+/* 小屏（分屏 / 老手机）再收一档 */
+@media (max-width: 420px){
+  .side{width:46px}
+  .content{padding-left:8px;padding-right:8px}
+}
+'''
 
 EXTRA_CSS = r'''/* ================= 外观：启动器化 =================
    参考做法（游戏官网 / HoYo 系启动器）：
@@ -7994,7 +8993,9 @@ def wall_css():
               .replace("@DIM@", "%.3f" % min(0.72, 0.30 + d * 0.45)))
     # 这一串不能丢：磨砂、横幅、字号、控件样式都在里面
     return (out + EXTRA_CSS + HERO_CSS + FIX_CSS + SIDE_CSS + TASTE_CSS
-            + FONT_CSS + SIDEBAR_CSS + SET_CSS + GLASSOFF_CSS + PICKER_CSS + GALLERY_CSS)
+            + FONT_CSS + SIDEBAR_CSS + SET_CSS + GLASSOFF_CSS + PICKER_CSS + GALLERY_CSS
+            # 手机端规则放最后 —— 同优先级下后写的赢
+            + MOBILE_CSS)
 
 
 @app.get("/admin/api/wallpaper/presets")
@@ -9014,8 +10015,8 @@ async def _fetch_asset_bytes(assets, aname):
     try:
         cli = get_http()
         h = {"Accept": "application/octet-stream", "User-Agent": _ua()}
-        if UPDATE_TOKEN:
-            h["Authorization"] = "Bearer " + UPDATE_TOKEN
+        if _update_token():
+            h["Authorization"] = "Bearer " + _update_token()
         r = await cli.get(url, headers=h, timeout=60.0, follow_redirects=True)
         if r.status_code != 200:
             raise RuntimeError("HTTP %s" % r.status_code)
@@ -9111,8 +10112,9 @@ async def _update_one_attempt(url, part, st):
     cli = get_http()
     h = {"Accept": "application/octet-stream",
          "User-Agent": _ua()}
-    if UPDATE_TOKEN:
-        h["Authorization"] = "Bearer " + UPDATE_TOKEN
+    _tk = _update_token()
+    if _tk:
+        h["Authorization"] = "Bearer " + _tk
     # 自己计时。之前用的是整轮下载（含前面失败的尝试）的开始时间，
     # 而 st["got"] 每次重试都归零 —— 于是重试成功时速度被明显低估
     # （用户看到 1.2 MB/s，实际可能是 5 MB/s）。
@@ -9374,8 +10376,9 @@ async def api_update_ping(token: str = "", src: str = "direct"):
     h = {"Accept": "application/octet-stream",
          "Range": "bytes=0-65535",
          "User-Agent": _ua()}
-    if UPDATE_TOKEN:
-        h["Authorization"] = "Bearer " + UPDATE_TOKEN
+    _tk = _update_token()
+    if _tk:
+        h["Authorization"] = "Bearer " + _tk
     t0 = time.time()
     try:
         cli = get_http()
@@ -9475,8 +10478,9 @@ async def api_update_download(token: str = "", name: str = "", src: str = "direc
         cli = get_http()
         _h2 = {"Accept": "application/octet-stream",
                "User-Agent": _ua()}
-        if UPDATE_TOKEN:
-            _h2["Authorization"] = "Bearer " + UPDATE_TOKEN
+        _tk2 = _update_token()
+        if _tk2:
+            _h2["Authorization"] = "Bearer " + _tk2
         r = await cli.get(api_url, headers=_h2,
                           timeout=900.0, follow_redirects=True)
     except Exception as e:
@@ -10155,6 +11159,7 @@ textarea.inp{resize:vertical;line-height:1.6}
 
     <div class="nav-section">群管</div>
     <button class="nav-item" data-page="risk" data-title="风控"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l9 4v6c0 5-3.8 9.3-9 10-5.2-.7-9-5-9-10V6z"/><path d="M9 12l2 2 4-4"/></svg><span>风控</span></button>
+    <button class="nav-item" data-page="stk" data-title="表情库"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span>表情库</span></button>
     <button class="nav-item" data-page="mem" data-title="长期记忆"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a4 4 0 0 0-4 4v1a3 3 0 0 0-3 3 3 3 0 0 0 1 2.2A3 3 0 0 0 6 16a3 3 0 0 0 3 3h1v2h4v-2h1a3 3 0 0 0 3-3 3 3 0 0 0-1-2.8A3 3 0 0 0 19 11a3 3 0 0 0-3-3V7a4 4 0 0 0-4-4z"/></svg><span>长期记忆</span><span class="badge" id="badge-mem"></span></button>
     <button class="nav-item" data-page="kb" data-title="知识库"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H19v3H6.5A2.5 2.5 0 0 1 4 20.5z"/><line x1="8" y1="7.5" x2="15" y2="7.5"/><line x1="8" y1="11" x2="13" y2="11"/></svg><span>知识库</span><span class="badge" id="badge-kb"></span></button>
 
@@ -10373,6 +11378,44 @@ textarea.inp{resize:vertical;line-height:1.6}
         <div id="kbImportRes" class="api-result" style="margin-top:12px;display:none"></div>
       </div>
     </div>
+  <div class="page" id="page-stk">
+    <div class="card">
+      <div class="card-h"><h3>表情库</h3><span class="en">Stickers</span>
+        <div class="right"><button class="btn ghost sm" onclick="loadStk()">刷新</button></div>
+      </div>
+      <div id="stkStat" style="font-size:12.5px;color:var(--text-3);margin-bottom:12px">加载中…</div>
+      <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+        <input id="stkKw" placeholder="搜备注 / 标签" style="flex:1;min-width:140px;background:var(--card-bg);border:1px solid var(--line-2);border-radius:8px;padding:9px 12px;font-size:13px;outline:none;color:var(--text)">
+        <select id="stkKind" style="background:var(--card-bg);border:1px solid var(--line-2);border-radius:8px;padding:9px 12px;font-size:13px;outline:none;color:var(--text)">
+          <option value="">全部类型</option>
+          <option value="sticker">表情</option>
+          <option value="image">图片</option>
+        </select>
+        <button class="btn" onclick="loadStk()">筛选</button>
+        <button class="btn danger" onclick="stkDelSel()">删除选中</button>
+        <button class="btn ghost" onclick="stkClean()">清理过期</button>
+      </div>
+      <div id="stkGrid"><div class="empty"><div class="big">…</div><div class="msg">加载中</div></div></div>
+    </div>
+    <div class="card" id="stkEditBox" style="display:none">
+      <div class="card-h"><h3>编辑</h3><span class="en">Edit</span>
+        <div class="right"><button class="btn ghost sm" onclick="document.getElementById('stkEditBox').style.display='none'">关闭</button></div>
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap">
+        <img id="stkBig" style="width:200px;height:200px;object-fit:contain;background:var(--line);border-radius:10px" alt="">
+        <div style="flex:1;min-width:220px">
+          <div style="font-size:12px;color:var(--text-3);margin-bottom:5px">备注（自动识别的，可以手改）</div>
+          <textarea id="stkNote" style="width:100%;min-height:90px;background:var(--card-bg);border:1px solid var(--line-2);border-radius:8px;padding:10px;font-size:13px;outline:none;color:var(--text)"></textarea>
+          <div style="font-size:12px;color:var(--text-3);margin:10px 0 5px">标签（逗号分隔，机器人按这个挑表情）</div>
+          <input id="stkTags" style="width:100%;background:var(--card-bg);border:1px solid var(--line-2);border-radius:8px;padding:9px 12px;font-size:13px;outline:none;color:var(--text)">
+          <div style="margin-top:14px;display:flex;gap:8px">
+            <button class="btn primary" onclick="stkSave()">保存</button>
+            <button class="btn danger" onclick="stkDelOne()">删除这张</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
     <div class="page" id="page-persona">
       <div class="card">
@@ -10680,7 +11723,7 @@ function setPage(n,t){
      以前不管点哪都会把 .on 摘了再挂上，浏览器就当成一次新的
      DOM 变化 —— 挂在上面的 fadeIn 动画从头再跑一遍，内容从
      opacity:0 起来，看着就是"点一下白一下"。*/
-  if(document.getElementById("page-"+n)?.classList.contains("on"))return;document.querySelectorAll(".nav-item").forEach(b=>b.classList.toggle("on",b.dataset.page===n));document.querySelectorAll(".page").forEach(p=>p.classList.toggle("on",p.id==="page-"+n));document.getElementById("pageTitle").textContent=t;if(n==="mem")loadMem();if(n==="kb")loadKB();if(n==="risk")loadBL();if(n==="join"){loadRequests();loadVF();}if(n==="persona")loadPersona();if(n==="voice")loadVoice();if(n==="aichat")loadAiChat();if(n==="cfg")loadConfig();if(n==="appear")loadAppear();if(n==="debug")loadBackups();if(n==="plugins"){loadPlugins();setPlugTab("installed");}updateFab();}
+  if(document.getElementById("page-"+n)?.classList.contains("on"))return;document.querySelectorAll(".nav-item").forEach(b=>b.classList.toggle("on",b.dataset.page===n));document.querySelectorAll(".page").forEach(p=>p.classList.toggle("on",p.id==="page-"+n));document.getElementById("pageTitle").textContent=t;if(n==="mem")loadMem();if(n==="kb")loadKB();if(n==="risk")loadBL();if(n==="stk")loadStk();if(n==="join"){loadRequests();loadVF();}if(n==="persona")loadPersona();if(n==="voice")loadVoice();if(n==="aichat")loadAiChat();if(n==="cfg")loadConfig();if(n==="appear")loadAppear();if(n==="debug")loadBackups();if(n==="plugins"){loadPlugins();setPlugTab("installed");}updateFab();}
 document.querySelectorAll(".nav-item").forEach(b=>{b.onclick=()=>setPage(b.dataset.page,b.dataset.title);});
 
 document.querySelectorAll(".api-tab").forEach(b=>{b.onclick=()=>{
@@ -11726,6 +12769,92 @@ async function kbImport(){
   document.getElementById("kbImportText").value="";
   loadKB();pollStats();
 }
+var _stkCur = null, _stkSel = {};
+async function loadStk(){
+  var el = document.getElementById("stkGrid");
+  var stat = document.getElementById("stkStat");
+  var kind = (document.getElementById("stkKind")||{}).value || "";
+  var kw = (document.getElementById("stkKw")||{}).value || "";
+  el.innerHTML = '<div class="empty"><div class="big">…</div><div class="msg">加载中</div></div>';
+  try{
+    var d = await api("/admin/api/stickers?kind=" + encodeURIComponent(kind) +
+                      "&kw=" + encodeURIComponent(kw) + "&limit=200");
+  }catch(e){ el.innerHTML = '<div class="empty">读取失败</div>'; return; }
+  _stkSel = {};
+  var mb = (d.bytes||0)/1048576;
+  stat.textContent = "共 " + d.total + " 张（" + mb.toFixed(1) + " MB / 上限 " +
+                     d.max_mb + " MB，" + d.max_count + " 张）" +
+                     (d.enabled ? "" : "  ·  表情库已关闭") +
+                     (d.send_enabled ? "" : "  ·  已禁止主动发送");
+  if(!d.items || !d.items.length){
+    el.innerHTML = '<div class="empty"><div class="big">🗂</div><div class="msg">还没有表情。<br>群里有人发图、或者有人发表情，就会自动收进来。</div></div>';
+    return;
+  }
+  var h = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:10px">';
+  for(var i=0;i<d.items.length;i++){
+    var it = d.items[i];
+    h += '<div style="position:relative;cursor:pointer" data-sid="' + it.id + '">'
+      +  '<img src="' + it.url + '" loading="lazy" onclick="stkOpen(' + it.id + ')" '
+      +  'style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:9px;'
+      +  'border:2px solid ' + (_stkCur===it.id ? 'var(--azure)' : 'transparent') + ';background:var(--line)">'
+      +  '<input type="checkbox" onclick="event.stopPropagation();stkMark(' + it.id + ',this.checked)" '
+      +  'style="position:absolute;left:5px;top:5px;width:17px;height:17px">'
+      +  '<span style="position:absolute;right:5px;bottom:5px;font-size:10px;'
+      +  'background:rgba(0,0,0,.6);color:#fff;padding:1px 5px;border-radius:5px">'
+      +  (it.kind==="sticker" ? "表情" : "图片") + '</span>'
+      +  (it.use_count ? '<span style="position:absolute;left:5px;bottom:5px;font-size:10px;'
+      +   'background:rgba(0,0,0,.6);color:#fff;padding:1px 5px;border-radius:5px">×'
+      +   it.use_count + '</span>' : '')
+      +  '</div>';
+  }
+  el.innerHTML = h + '</div>';
+}
+function stkMark(id, on){ if(on){_stkSel[id]=1;} else {delete _stkSel[id];} }
+function stkOpen(id){
+  _stkCur = id;
+  api("/admin/api/stickers?limit=500").then(function(d){
+    var it = (d.items||[]).filter(function(x){return x.id===id;})[0];
+    if(!it) return;
+    document.getElementById("stkEditBox").style.display = "";
+    document.getElementById("stkBig").src = it.url;
+    document.getElementById("stkNote").value = it.note || "";
+    document.getElementById("stkTags").value = it.tags || "";
+    loadStk();
+  });
+}
+async function stkSave(){
+  if(!_stkCur) return;
+  await post("/admin/api/stickers/note", {id:_stkCur,
+    note: document.getElementById("stkNote").value,
+    tags: document.getElementById("stkTags").value});
+  toast("已保存");
+  loadStk();
+}
+async function stkDelOne(){
+  if(!_stkCur) return;
+  if(!confirm("删掉这张？文件也会一起删。")) return;
+  await post("/admin/api/stickers/delete", {ids:[_stkCur]});
+  document.getElementById("stkEditBox").style.display = "none";
+  _stkCur = null;
+  toast("已删除");
+  loadStk();
+}
+async function stkClean(){
+  if(!confirm("清理过期的表情？只删长期没人用过的。")) return;
+  var r = await post("/admin/api/stickers/cleanup", {});
+  toast("删了 " + (r.deleted||0) + " 张，释放 " + (r.freed_kb||0) + " KB");
+  loadStk();
+}
+async function stkDelSel(){
+  var ids = Object.keys(_stkSel).map(Number);
+  if(!ids.length){ toast("先勾选要删的"); return; }
+  if(!confirm("删掉选中的 " + ids.length + " 张？")) return;
+  await post("/admin/api/stickers/delete", {ids:ids});
+  toast("已删除 " + ids.length + " 张");
+  loadStk();
+}
+
+
 async function loadBL(){const data=await api("/admin/api/blacklist");const el=document.getElementById("blList");if(!data.length){el.innerHTML='<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M5.5 5.5l13 13"/></svg><div class="msg">暂无黑名单记录</div></div>';return;}let h='<table class="tbl"><thead><tr><th>QQ</th><th>群号</th><th>昵称</th><th>原因</th><th>时间</th><th></th></tr></thead><tbody>';for(const e of data){h+=`<tr><td class="mono">${e.user_id}</td><td class="mono">${e.group_id}</td><td class="strong">${esc(e.nickname||"-")}</td><td>${esc(e.reason||"")}</td><td class="mono" style="color:var(--text-4)">${fmtT(e.added_at)}</td><td><button class="btn danger sm" onclick="delBL(${e.user_id},${e.group_id})">解除</button></td></tr>`;}h+="</tbody></table>";el.innerHTML=h;}
 async function delBL(u,g){await api(`/admin/api/blacklist/remove?user_id=${u}&group_id=${g}`,{method:"POST"});toast("已解除");loadBL();pollStats();}
 async function addBL(){const u=document.getElementById("blQQ").value.trim();const g=document.getElementById("blGID").value.trim();if(!u||!g){toast("请填写 QQ 和群号","err");return;}await api(`/admin/api/blacklist/add?user_id=${u}&group_id=${g}`,{method:"POST"});toast("已拉黑");document.getElementById("blQQ").value="";loadBL();pollStats();}
@@ -13237,7 +14366,7 @@ def run_server():
         asyncio.set_event_loop(loop)
         MAIN_LOOP = loop
         MAIN_LOOP_READY.set()
-        config = uvicorn.Config(asgi, host="127.0.0.1", port=PORT,
+        config = uvicorn.Config(asgi, host=_bind_host(), port=PORT,
                                 log_level="warning", access_log=False)
         server = uvicorn.Server(config)
         loop.run_until_complete(server.serve())
@@ -13685,6 +14814,16 @@ def main():
     from urllib.parse import quote as _q
     _tok_q = _q(str(ADMIN_TOKEN), safe="")
     url = f"http://127.0.0.1:{PORT}/admin?token={_tok_q}"
+    if cfg_bool("lan_access", False):
+        _urls = _lan_urls(PORT)
+        if _urls:
+            print("  局域网访问（手机连同一个 WiFi 就能开）:",
+                  flush=True)
+            for _u in _urls:
+                print("    %s?token=%s" % (_u, ADMIN_TOKEN),
+                      flush=True)
+        else:
+            print("  局域网访问：已开启，但没探到局域网 IP", flush=True)
 
     window = None
     try:

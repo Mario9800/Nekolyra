@@ -8,12 +8,13 @@
 
 `Windows 桌面版` · `插件化` · `本地优先` · `数据全在自己手里`
 
-<sub>当前版本 <b>1.0.3.9</b> · <a href="CHANGELOG.md">更新日志</a> · <a href="https://github.com/awnpw/Nekolyra/releases/latest">下载最新版</a></sub>
+<sub>当前版本 <b>1.0.4.0</b> · <a href="CHANGELOG.md">更新日志</a> · <a href="https://github.com/awnpw/Nekolyra/releases/latest">下载最新版</a></sub>
 
 </div>
 
-> 带知识库检索、带插件运行时、带一个完整的 Web 管理界面
-> 上手要花几分钟配一个 AI 接口和一个 QQ 协议端。
+> **先说清楚** —— 这不是"接个 API 就能回话"的玩具。它带数据库、带长期记忆、
+> 带知识库检索、带插件运行时、带一个完整的 Web 管理界面，还有一个**带签名校验**
+> 的自动更新。上手要花十几分钟配一个 AI 接口和一个 QQ 协议端。
 
 ---
 
