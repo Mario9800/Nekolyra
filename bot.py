@@ -7144,7 +7144,18 @@ async def _on_ai(bot: Bot, event: GroupMessageEvent):
     if raw_text:
         preview = raw_text[:80]
     elif image_urls:
-        preview = f"[图片 x{len(image_urls)}]"
+        # 区分表情和图片 —— OneBot 的 image 段自带 sub_type，
+        # 0 是普通图片、1 是表情/贴纸。以前一律显示 "[图片 x1]"，
+        # 群里发的表情包在记录里看不出来是表情。
+        _kinds = tag_image_kind(event)
+        _n_st = sum(1 for u in image_urls if _kinds.get(u) == "sticker")
+        _n_im = len(image_urls) - _n_st
+        _parts = []
+        if _n_st:
+            _parts.append("[表情]" if _n_st == 1 else f"[表情 x{_n_st}]")
+        if _n_im:
+            _parts.append("[图片]" if _n_im == 1 else f"[图片 x{_n_im}]")
+        preview = " ".join(_parts) or f"[图片 x{len(image_urls)}]"
     else:
         preview = "(空)"
     log("msg", "收到", f"[群{gid}] {nick_for_act}({uid}): {preview}")
