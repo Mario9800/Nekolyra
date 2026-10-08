@@ -1,8 +1,8 @@
 {
-  "tag": "v1.0.4.1",
-  "latest": "1.0.4.1",
-  "name": "Nekolyra 1.0.4.1",
-  "url": "https://github.com/awnpw/Nekolyra/releases/tag/v1.0.4.1",
-  "published": "2026-10-09T03:00:00Z",
-  "notes": "### 聊天记录里区分「表情」和「图片」\n\n以前不管是照片还是表情包，记录里一律显示 `[图片 x1]`。\n现在按 OneBot 的 `sub_type` 分开显示：\n\n```\n[表情]            一张表情\n[图片]            一张照片\n[表情 x2]         两张表情\n[表情] [图片 x1]   混着发\n```\n\n`sub_type` 是协议端直接给的（0 图片 / 1 表情），不用做图像识别，也不花额度。\n\n---"
+  "tag": "v1.0.3.9",
+  "latest": "1.0.3.9",
+  "name": "Nekolyra v1.0.3.9",
+  "url": "https://github.com/awnpw/Nekolyra/releases/tag/v1.0.3.9",
+  "published": "2026-10-06T14:10:00Z",
+  "notes": "维护版本。"
 }
